@@ -1,10 +1,27 @@
+import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import streamlit as st
+
+# --- 必須最先設定頁面參數 ---
+st.set_page_config(layout="wide")
+
+# --- 使用者登入驗證 ---
+def login():
+    st.title("🔐 請先登入")
+    username = st.text_input("使用者名稱")
+    password = st.text_input("密碼", type="password")
+    if st.button("登入"):
+        if username == "family" and password == "123456":
+            st.session_state['authenticated'] = True
+        else:
+            st.error("帳號或密碼錯誤")
+
+if 'authenticated' not in st.session_state:
+    login()
+    st.stop()
 
 # --- Streamlit Web App ---
-st.set_page_config(layout="wide")
 st.title("📊 用電趨勢異常分析系統")
 
 # --- 檔案上傳區 ---
@@ -63,9 +80,6 @@ if uploaded_file:
     # 異常偵測（只對已計算用電量的資料進行）
     matched = data_for_calc[data_for_calc['日期'] == selected_date].copy()
     median = matched['用電量'].median()
-    average = matched['用電量'].mean()
-    min_val = min(matched['用電量'])
-    max_val = max(matched['用電量'])
     mad = (matched['用電量'] - median).abs().mean()
     mad_threshold = st.slider("MAD 閾值倍數", 1.0, 5.0, 3.0, 0.5)
 
@@ -74,14 +88,11 @@ if uploaded_file:
 
     # 顯示統計資訊
     st.subheader(f"📆 {selected_date} 統計資料")
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4 = st.columns(4)
     col1.metric("總用電量 (KWH)", f"{matched['用電量'].sum():,.2f}")
-    col2.metric("平均用電量", f"{average:,.2f}")
-    col3.metric("平均用電量", f"{min_val:,.2f}")
-    col4.metric("平均用電量", f"{max_val:,.2f}")
-    # col2.metric("中位數", f"{median:,.2f}")
-    # col3.metric("MAD", f"{mad:,.2f}")
-    col5.metric("異常點數量", f"{(matched['狀態'] == '異常').sum()}")
+    col2.metric("中位數", f"{median:,.2f}")
+    col3.metric("MAD", f"{mad:,.2f}")
+    col4.metric("異常點數量", f"{(matched['狀態'] == '異常').sum()}")
 
     # 顯示異常時間範圍
     st.subheader("⏱️ 異常時間區段")
