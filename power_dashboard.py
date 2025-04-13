@@ -1,3 +1,4 @@
+import numpy
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -81,6 +82,9 @@ if uploaded_file:
     matched = data_for_calc[data_for_calc['日期'] == selected_date].copy()
     median = matched['用電量'].median()
     mad = (matched['用電量'] - median).abs().mean()
+    min_val = numpy.min(matched['用電量'])
+    max_val = numpy.max(matched['用電量'])
+    avg_val = numpy.mean(matched['用電量'])
     mad_threshold = st.slider("MAD 閾值倍數", 1.0, 5.0, 3.0, 0.5)
 
     matched['狀態'] = '正常'
@@ -88,11 +92,14 @@ if uploaded_file:
 
     # 顯示統計資訊
     st.subheader(f"📆 {selected_date} 統計資料")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("總用電量 (KWH)", f"{matched['用電量'].sum():,.2f}")
-    col2.metric("中位數", f"{median:,.2f}")
-    col3.metric("MAD", f"{mad:,.2f}")
-    col4.metric("異常點數量", f"{(matched['狀態'] == '異常').sum()}")
+    col2.metric("最小用電量", f"{min_val:,.2f}")
+    col3.metric("最大用電量", f"{max_val:,.2f}")
+    col4.metric("平均用電量", f"{avg_val:,.2f}")
+    # col2.metric("中位數", f"{median:,.2f}")
+    # col3.metric("MAD", f"{mad:,.2f}")
+    col5.metric("異常點數量", f"{(matched['狀態'] == '異常').sum()}")
 
     # 顯示異常時間範圍
     st.subheader("⏱️ 異常時間區段")
