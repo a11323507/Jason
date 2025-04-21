@@ -8,22 +8,24 @@ import plotly.express as px
 st.set_page_config(layout="wide")
 
 # --- 使用者登入驗證 ---
-def login():
-    st.title("🔐 請先登入")
-    username = st.text_input("使用者名稱")
-    password = st.text_input("密碼", type="password")
-    if st.button("登入"):
-        if username == "family" and password == "123456":
-            st.session_state['authenticated'] = True
-        else:
-            st.error("帳號或密碼錯誤")
-
-if 'authenticated' not in st.session_state:
-    login()
-    st.stop()
+# def login():
+#     st.title("🔐 請先登入")
+#     username = st.text_input("使用者名稱")
+#     password = st.text_input("密碼", type="password")
+#     if st.button("登入"):
+#         if username == "family" and password == "123456":
+#             st.session_state['authenticated'] = True
+#         else:
+#             st.error("帳號或密碼錯誤")
+#
+# if 'authenticated' not in st.session_state:
+#     login()
+#     st.stop()
 
 # --- Streamlit Web App ---
-st.title("📊 用電趨勢異常分析系統")
+st.image("logo.png", width=800)
+st.markdown("## 📊 用電趨勢異常分析系統")
+# st.title("📊 用電趨勢異常分析系統")
 
 # --- 檔案上傳區 ---
 uploaded_file = st.file_uploader("請上傳用電資料 Excel 檔案", type=["xlsx"])
