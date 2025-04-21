@@ -6,7 +6,7 @@ import plotly.express as px
 
 st.set_page_config(layout="wide")
 
-st.image("logo.png", width=800)
+st.image("logo.PNG", width=800)
 st.markdown("## 📊 產量用電 vs 產量 異常分析系統")
 # st.title("📊 產量用電 vs 產量 異常分析系統")
 
