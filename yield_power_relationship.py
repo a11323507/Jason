@@ -10,7 +10,7 @@ st.image("logo.PNG", width=800)
 st.markdown("## 📊 產量用電 vs 產量 異常分析系統")
 # st.title("📊 產量用電 vs 產量 異常分析系統")
 
-uploaded_file = st.file_uploader("請上傳澱粉用電 Excel 檔案（格式如：產量、用電指數）", type=["xlsx"])
+uploaded_file = st.file_uploader("請上傳產量用電 Excel 檔案（格式如：產量、用電指數）", type=["xlsx"])
 
 if uploaded_file:
     xls = pd.ExcelFile(uploaded_file)
