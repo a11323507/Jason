@@ -23,7 +23,7 @@ st.set_page_config(layout="wide")
 #     st.stop()
 
 # --- Streamlit Web App ---
-st.image("logo.png", width=800)
+st.image("logo.PNG", width=800)
 st.markdown("## 📊 用電趨勢異常分析系統")
 # st.title("📊 用電趨勢異常分析系統")
 
