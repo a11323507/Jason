@@ -5,7 +5,7 @@ import numpy as np
 import plotly.express as px
 
 # --- 必須最先設定頁面參數 ---
-st.set_page_config(layout="wide")
+# st.set_page_config(layout="wide")
 
 # --- 使用者登入驗證 ---
 # def login():
