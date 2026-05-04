@@ -55,13 +55,19 @@ st.sidebar.divider()
 st.sidebar.subheader("🔑 進階 API 設定")
 finmind_token = st.sidebar.text_input("FinMind API Token (選填)", type="password", help="若要解鎖大戶籌碼分布等付費資料，請輸入您的 Token。")
 
-# --- 抓取數據 ---
-@st.cache_data
+st.sidebar.divider()
+# --- 新增：手動清除快取按鈕 ---
+if st.sidebar.button("🔄 手動更新資料 (清除快取)"):
+    st.cache_data.clear()
+    st.sidebar.success("快取已清除！網頁將載入最新資料。")
+
+# --- 抓取數據 (加入 ttl=3600 強制一小時更新) ---
+@st.cache_data(ttl=3600)
 def load_data(symbol, start, end):
     data = yf.download(symbol, start=start, end=end)
     return data
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def load_info(symbol):
     try:
         ticker_obj = yf.Ticker(symbol)
@@ -69,7 +75,7 @@ def load_info(symbol):
     except Exception:
         return {}
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def load_fundamentals(symbol):
     try:
         ticker_obj = yf.Ticker(symbol)
@@ -97,7 +103,7 @@ def load_fundamentals(symbol):
     except Exception:
         return {}
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def load_tw_monthly_revenue(symbol, token=""):
     try:
         stock_id = symbol.split('.')[0]
@@ -191,7 +197,7 @@ def load_tw_chip_distribution(symbol, token=""):
         print(f"Error fetching chip distribution: {e}")
         return {}
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def load_tw_chip_data(symbol, total_volume_latest, token=""):
     try:
         stock_id = symbol.split('.')[0]
