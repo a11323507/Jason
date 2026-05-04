@@ -4,3 +4,7 @@ numpy
 plotly
 statsmodels
 openpyxl
+yfinance
+pandas
+pandas_ta
+protobuf>=3.19.5,<5.0.0
