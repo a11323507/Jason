@@ -45,8 +45,11 @@ else:
 
 st.sidebar.markdown(f"**實際查詢代碼:** `{ticker}`")
 
-start_date = st.sidebar.date_input("開始日期", value=datetime.now() - timedelta(days=365))
-end_date = st.sidebar.date_input("結束日期", value=datetime.now())
+now_tw = datetime.utcnow() + timedelta(hours=8)
+today_date = now_tw.date()
+
+start_date = st.sidebar.date_input("開始日期", value=today_date - timedelta(days=365))
+end_date = st.sidebar.date_input("結束日期", value=today_date)
 
 st.sidebar.subheader("技術指標參數")
 rsi_period = st.sidebar.number_input("RSI 週期", value=14)
