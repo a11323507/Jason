@@ -18,10 +18,15 @@ st.markdown("""
 # --- 側邊欄設定 ---
 st.sidebar.header("參數設定")
 
-market = st.sidebar.selectbox("選擇市場", ["美股 (US)", "台股上市 (TWSE)", "台股上櫃 (OTC)"])
+market = st.sidebar.selectbox("選擇市場", ["美股 (US)", "台股上市 (TWSE)", "台股上櫃 (OTC)", "虛擬貨幣 (Crypto)"])
 
 # 根據市場預設代碼
-default_ticker = "AAPL" if market == "美股 (US)" else "2330"
+if market == "美股 (US)":
+    default_ticker = "AAPL"
+elif market == "虛擬貨幣 (Crypto)":
+    default_ticker = "BTCUSDT"
+else:
+    default_ticker = "2330"
 raw_ticker = st.sidebar.text_input("輸入股票代碼 (不需輸入後綴)", value=default_ticker)
 
 # 自動處理股票代碼後綴與選擇對應的 Benchmark
@@ -40,6 +45,12 @@ elif market == "台股上櫃 (OTC)":
     ticker = f"{clean_ticker}.TWO"
     benchmark_ticker = "^TWOII"
     benchmark_name = "櫃檯買賣指數 (^TWOII)"
+elif market == "虛擬貨幣 (Crypto)":
+    ticker = raw_ticker.replace(" ", "").upper()
+    if not ticker.endswith("USDT"):
+        ticker = ticker + "USDT"
+    benchmark_ticker = "BTCUSDT"
+    benchmark_name = "比特幣永續合約 (BTCUSDT)"
 else:
     ticker = raw_ticker
 
@@ -69,6 +80,53 @@ if st.sidebar.button("🔄 手動更新資料 (清除快取)"):
 def load_data(symbol, start, end):
     data = yf.download(symbol, start=start, end=end)
     return data
+
+@st.cache_data(ttl=3600)
+def load_binance_perpetual(symbol, start, end):
+    """從 Binance 永續合約 API 抓取 K 線資料"""
+    try:
+        all_data = []
+        start_ts = int(pd.Timestamp(start).timestamp() * 1000)
+        end_ts = int(pd.Timestamp(end).timestamp() * 1000)
+        
+        while start_ts < end_ts:
+            url = "https://fapi.binance.com/fapi/v1/klines"
+            params = {
+                "symbol": symbol,
+                "interval": "1d",
+                "startTime": start_ts,
+                "endTime": end_ts,
+                "limit": 1500
+            }
+            resp = requests.get(url, params=params, timeout=10)
+            data = resp.json()
+            
+            if not data or isinstance(data, dict):
+                break
+                
+            all_data.extend(data)
+            start_ts = data[-1][0] + 1
+            
+            if len(data) < 1500:
+                break
+        
+        if not all_data:
+            return pd.DataFrame()
+            
+        df = pd.DataFrame(all_data, columns=[
+            'Open_time', 'Open', 'High', 'Low', 'Close', 'Volume',
+            'Close_time', 'Quote_volume', 'Trades', 'Taker_buy_base',
+            'Taker_buy_quote', 'Ignore'
+        ])
+        
+        df['Date'] = pd.to_datetime(df['Open_time'], unit='ms')
+        df = df.set_index('Date')
+        df = df[['Open', 'High', 'Low', 'Close', 'Volume']].astype(float)
+        
+        return df
+    except Exception as e:
+        print(f"Binance API error: {e}")
+        return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
 def load_info(symbol):
@@ -288,10 +346,16 @@ def calc_return(df, days):
     return 0.0
 
 try:
-    df = load_data(ticker, start_date, end_date)
-    bm_df = load_data(benchmark_ticker, start_date, end_date) # 抓取對應大盤數據
-    info = load_info(ticker)
-    fund_data = load_fundamentals(ticker)
+    if market == "虛擬貨幣 (Crypto)":
+        df = load_binance_perpetual(ticker, start_date, end_date)
+        bm_df = load_binance_perpetual(benchmark_ticker, start_date, end_date) if ticker != benchmark_ticker else df.copy()
+        info = {'shortName': f"{ticker} 永續合約", 'sector': '加密貨幣', 'industry': 'DeFi / Blockchain'}
+        fund_data = {}
+    else:
+        df = load_data(ticker, start_date, end_date)
+        bm_df = load_data(benchmark_ticker, start_date, end_date)
+        info = load_info(ticker)
+        fund_data = load_fundamentals(ticker)
 
     if df.empty:
         st.error("找不到該股票代碼的數據，請檢查輸入是否正確。")
@@ -653,64 +717,177 @@ try:
         # --- 顯示主要圖表 ---
         st.subheader(f"{ticker} 股價與技術指標")
         
+        # --- 自定義時間週期選擇 ---
+        interval_options = ["15m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "2d", "3d"]
+        interval_labels = ["15M", "1H", "2H", "4H", "6H", "8H", "12H", "1D", "2D", "3D"]
+        
+        selected_interval_label = st.selectbox(
+            "選擇 K 線時間週期", 
+            interval_labels, 
+            index=7,  # 預設 1D
+            help="注意：美股/台股使用 yfinance，短週期 (< 1D) 僅支援近 60 天資料；虛擬貨幣透過 Binance API 支援完整歷史。"
+        )
+        selected_interval = interval_options[interval_labels.index(selected_interval_label)]
+        
+        # 根據選擇的週期重新載入圖表資料
+        @st.cache_data(ttl=3600)
+        def load_chart_data_binance(symbol, start, end, interval):
+            """從 Binance 永續合約抓取指定週期 K 線"""
+            try:
+                all_data = []
+                start_ts = int(pd.Timestamp(start).timestamp() * 1000)
+                end_ts = int(pd.Timestamp(end).timestamp() * 1000)
+                
+                while start_ts < end_ts:
+                    url = "https://fapi.binance.com/fapi/v1/klines"
+                    params = {
+                        "symbol": symbol,
+                        "interval": interval,
+                        "startTime": start_ts,
+                        "endTime": end_ts,
+                        "limit": 1500
+                    }
+                    resp = requests.get(url, params=params, timeout=10)
+                    data = resp.json()
+                    
+                    if not data or isinstance(data, dict):
+                        break
+                    
+                    all_data.extend(data)
+                    start_ts = data[-1][0] + 1
+                    
+                    if len(data) < 1500:
+                        break
+                
+                if not all_data:
+                    return pd.DataFrame()
+                    
+                df_chart = pd.DataFrame(all_data, columns=[
+                    'Open_time', 'Open', 'High', 'Low', 'Close', 'Volume',
+                    'Close_time', 'Quote_volume', 'Trades', 'Taker_buy_base',
+                    'Taker_buy_quote', 'Ignore'
+                ])
+                
+                df_chart['Date'] = pd.to_datetime(df_chart['Open_time'], unit='ms')
+                df_chart = df_chart.set_index('Date')
+                df_chart = df_chart[['Open', 'High', 'Low', 'Close', 'Volume']].astype(float)
+                
+                return df_chart
+            except Exception as e:
+                print(f"Binance chart API error: {e}")
+                return pd.DataFrame()
+        
+        @st.cache_data(ttl=3600)
+        def load_chart_data_yf(symbol, start, end, interval):
+            """從 yfinance 抓取指定週期資料 (短週期僅支援近期)"""
+            try:
+                data = yf.download(symbol, start=start, end=end, interval=interval)
+                return data
+            except Exception:
+                return pd.DataFrame()
+        
+        # 載入圖表用資料
+        if selected_interval == "1d":
+            df_chart = df.copy()
+        else:
+            if market == "虛擬貨幣 (Crypto)":
+                df_chart = load_chart_data_binance(ticker, start_date, end_date, selected_interval)
+            else:
+                # yfinance 短週期限制：1m(7天), 2/5/15/30m(60天), 60m/1h(730天)
+                yf_interval_map = {"15m": "15m", "1h": "1h", "2h": "2h", "4h": "4h",
+                                   "6h": "6h", "8h": "8h", "12h": "12h", "2d": "5d", "3d": "1wk"}
+                yf_interval = yf_interval_map.get(selected_interval, "1d")
+                # yfinance 僅支援部分週期，不支援的降回 1d
+                yf_valid = ["1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"]
+                if yf_interval not in yf_valid:
+                    st.warning(f"⚠️ yfinance 不支援 `{selected_interval}` 週期，將使用日線 (1D) 替代。")
+                    df_chart = df.copy()
+                else:
+                    df_chart = load_chart_data_yf(ticker, start_date, end_date, yf_interval)
+                    if df_chart.empty:
+                        st.warning(f"⚠️ 無法取得 `{selected_interval}` 週期資料（可能超出 yfinance 歷史限制），改用日線。")
+                        df_chart = df.copy()
+            
+            # 處理 MultiIndex columns
+            if not df_chart.empty and isinstance(df_chart.columns, pd.MultiIndex):
+                df_chart.columns = [col[0] for col in df_chart.columns]
+            if not df_chart.empty:
+                df_chart = df_chart.loc[:, ~df_chart.columns.duplicated()]
+                df_chart = df_chart.dropna(subset=['Close', 'Open', 'High', 'Low'])
+                
+                # 重新計算該週期的技術指標
+                for ma in ma_periods:
+                    df_chart.ta.sma(length=ma, append=True)
+                df_chart.ta.rsi(length=rsi_period, append=True)
+                df_chart.ta.macd(append=True)
+                
+                df_chart['Signal'] = 0.0
+                if 'SMA_5' in df_chart.columns and 'SMA_20' in df_chart.columns:
+                    df_chart.loc[df_chart['SMA_5'] > df_chart['SMA_20'], 'Signal'] = 1.0
+                df_chart['Position'] = df_chart['Signal'].diff()
+        
         tab1, tab2, tab3 = st.tabs(["📊 綜合分析", "🕯️ 純 K 線圖", "📈 數據與回測"])
         
         with tab1:
             fig = make_subplots(rows=4, cols=1, shared_xaxes=True, 
                                vertical_spacing=0.05, 
                                row_heights=[0.4, 0.2, 0.2, 0.2],
-                               subplot_titles=('K線圖與均線 (5/10/20/60/120)', '成交量 (Volume)', 'RSI', 'MACD'))
+                               subplot_titles=(f'K線圖與均線 ({selected_interval_label})', '成交量 (Volume)', 'RSI', 'MACD'))
 
-            fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], 
-                                        low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
+            fig.add_trace(go.Candlestick(x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], 
+                                        low=df_chart['Low'], close=df_chart['Close'], name='K線'), row=1, col=1)
             
             ma_colors = {5: 'orange', 10: 'blue', 20: 'green', 60: 'red', 120: 'purple'}
             for ma, color in ma_colors.items():
-                if f'SMA_{ma}' in df.columns:
-                    fig.add_trace(go.Scatter(x=df.index, y=df[f'SMA_{ma}'], name=f'SMA {ma}', line=dict(color=color, width=1)), row=1, col=1)
+                if f'SMA_{ma}' in df_chart.columns:
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'SMA_{ma}'], name=f'SMA {ma}', line=dict(color=color, width=1)), row=1, col=1)
 
-            buy_signals = df[df['Position'] == 1]
-            sell_signals = df[df['Position'] == -1]
+            buy_signals = df_chart[df_chart['Position'] == 1]
+            sell_signals = df_chart[df_chart['Position'] == -1]
             
             fig.add_trace(go.Scatter(x=buy_signals.index, y=buy_signals['Low'] * 0.98, mode='markers', 
                                     marker=dict(symbol='triangle-up', size=10, color='green'), name='買入訊號'), row=1, col=1)
             fig.add_trace(go.Scatter(x=sell_signals.index, y=sell_signals['High'] * 1.02, mode='markers', 
                                     marker=dict(symbol='triangle-down', size=10, color='red'), name='賣出訊號'), row=1, col=1)
 
-            _close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-            _open = df['Open'].iloc[:, 0] if isinstance(df['Open'], pd.DataFrame) else df['Open']
-            _volume = df['Volume'].iloc[:, 0] if isinstance(df['Volume'], pd.DataFrame) else df['Volume']
+            _close = df_chart['Close'].iloc[:, 0] if isinstance(df_chart['Close'], pd.DataFrame) else df_chart['Close']
+            _open = df_chart['Open'].iloc[:, 0] if isinstance(df_chart['Open'], pd.DataFrame) else df_chart['Open']
+            _volume = df_chart['Volume'].iloc[:, 0] if isinstance(df_chart['Volume'], pd.DataFrame) else df_chart['Volume']
             
             vol_colors = ['#ef5350' if c >= o else '#26a69a' for c, o in zip(_close, _open)]
-            fig.add_trace(go.Bar(x=df.index, y=_volume, name='成交量', marker_color=vol_colors), row=2, col=1)
+            fig.add_trace(go.Bar(x=df_chart.index, y=_volume, name='成交量', marker_color=vol_colors), row=2, col=1)
 
-            fig.add_trace(go.Scatter(x=df.index, y=df[f'RSI_{rsi_period}'], name='RSI', line=dict(color='purple')), row=3, col=1)
+            if f'RSI_{rsi_period}' in df_chart.columns:
+                fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'RSI_{rsi_period}'], name='RSI', line=dict(color='purple')), row=3, col=1)
             fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
             fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
 
-            fig.add_trace(go.Bar(x=df.index, y=df[f'MACDh_{12}_{26}_{9}'], name='Histogram'), row=4, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df[f'MACD_{12}_{26}_{9}'], name='MACD'), row=4, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df[f'MACDs_{12}_{26}_{9}'], name='Signal'), row=4, col=1)
+            if f'MACDh_12_26_9' in df_chart.columns:
+                fig.add_trace(go.Bar(x=df_chart.index, y=df_chart[f'MACDh_{12}_{26}_{9}'], name='Histogram'), row=4, col=1)
+                fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'MACD_{12}_{26}_{9}'], name='MACD'), row=4, col=1)
+                fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'MACDs_{12}_{26}_{9}'], name='Signal'), row=4, col=1)
 
             fig.update_layout(height=1000, xaxis_rangeslider_visible=False, showlegend=True)
-            fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+            if selected_interval in ['1d', '2d', '3d']:
+                fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
             st.plotly_chart(fig, use_container_width=True)
 
         with tab2:
-            st.markdown("### 專屬 K 線圖 (Candlestick Chart)")
-            fig_k = go.Figure(data=[go.Candlestick(x=df.index,
-                            open=df['Open'],
-                            high=df['High'],
-                            low=df['Low'],
-                            close=df['Close'],
+            st.markdown(f"### 專屬 K 線圖 ({selected_interval_label})")
+            fig_k = go.Figure(data=[go.Candlestick(x=df_chart.index,
+                            open=df_chart['Open'],
+                            high=df_chart['High'],
+                            low=df_chart['Low'],
+                            close=df_chart['Close'],
                             name='K線')])
             
             for ma, color in ma_colors.items():
-                if f'SMA_{ma}' in df.columns:
-                    fig_k.add_trace(go.Scatter(x=df.index, y=df[f'SMA_{ma}'], name=f'SMA {ma}', line=dict(color=color, width=1)))
+                if f'SMA_{ma}' in df_chart.columns:
+                    fig_k.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'SMA_{ma}'], name=f'SMA {ma}', line=dict(color=color, width=1)))
             
             fig_k.update_layout(height=600, xaxis_rangeslider_visible=False, showlegend=True)
-            fig_k.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+            if selected_interval in ['1d', '2d', '3d']:
+                fig_k.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
             st.plotly_chart(fig_k, use_container_width=True)
 
         with tab3:
