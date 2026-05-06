@@ -1,7 +1,6 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
@@ -63,6 +62,15 @@ start_date = st.sidebar.date_input("開始日期", value=today_date - timedelta(
 end_date = st.sidebar.date_input("結束日期", value=today_date)
 
 st.sidebar.subheader("技術指標參數")
+interval_options = ["15m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "2d", "3d"]
+interval_labels = ["15M", "1H", "2H", "4H", "6H", "8H", "12H", "1D", "2D", "3D"]
+selected_interval_label = st.sidebar.selectbox(
+    "選擇 K 線時間週期", 
+    interval_labels, 
+    index=7,  # 預設 1D
+    help="注意：美股/台股使用 yfinance，短週期 (< 1D) 僅支援近 60 天資料；虛擬貨幣透過 Binance API 支援完整歷史。"
+)
+selected_interval = interval_options[interval_labels.index(selected_interval_label)]
 rsi_period = st.sidebar.number_input("RSI 週期", value=14)
 
 st.sidebar.divider()
@@ -75,27 +83,25 @@ if st.sidebar.button("🔄 手動更新資料 (清除快取)"):
     st.cache_data.clear()
     st.sidebar.success("快取已清除！網頁將載入最新資料。")
 
-# --- 抓取數據 (加入 ttl=3600 強制一小時更新) ---
-@st.cache_data(ttl=3600)
-def load_data(symbol, start, end):
-    data = yf.download(symbol, start=start, end=end)
-    return data
-
-@st.cache_data(ttl=3600)
-def load_binance_perpetual(symbol, start, end):
-    """從 Binance 永續合約 API 抓取 K 線資料"""
+# --- 抓取數據 ---
+@st.cache_data(ttl=60)
+def load_chart_data_binance(symbol, start, end, interval):
+    """從 Binance 永續合約抓取指定週期 K 線"""
     try:
         all_data = []
         start_ts = int(pd.Timestamp(start).timestamp() * 1000)
-        end_ts = int(pd.Timestamp(end).timestamp() * 1000)
+        # 結束時間設為現在
+        now_ts = int(datetime.utcnow().timestamp() * 1000)
+        end_ts = int((pd.Timestamp(end) + timedelta(days=1)).timestamp() * 1000) - 1
+        request_end_ts = min(end_ts, now_ts)
         
-        while start_ts < end_ts:
+        while start_ts < request_end_ts:
             url = "https://fapi.binance.com/fapi/v1/klines"
             params = {
                 "symbol": symbol,
-                "interval": "1d",
+                "interval": interval,
                 "startTime": start_ts,
-                "endTime": end_ts,
+                "endTime": request_end_ts,
                 "limit": 1500
             }
             resp = requests.get(url, params=params, timeout=10)
@@ -103,7 +109,7 @@ def load_binance_perpetual(symbol, start, end):
             
             if not data or isinstance(data, dict):
                 break
-                
+            
             all_data.extend(data)
             start_ts = data[-1][0] + 1
             
@@ -113,20 +119,52 @@ def load_binance_perpetual(symbol, start, end):
         if not all_data:
             return pd.DataFrame()
             
-        df = pd.DataFrame(all_data, columns=[
+        df_chart = pd.DataFrame(all_data, columns=[
             'Open_time', 'Open', 'High', 'Low', 'Close', 'Volume',
             'Close_time', 'Quote_volume', 'Trades', 'Taker_buy_base',
             'Taker_buy_quote', 'Ignore'
         ])
         
-        df['Date'] = pd.to_datetime(df['Open_time'], unit='ms')
-        df = df.set_index('Date')
-        df = df[['Open', 'High', 'Low', 'Close', 'Volume']].astype(float)
+        df_chart['Date'] = pd.to_datetime(df_chart['Open_time'], unit='ms')
+        df_chart = df_chart.set_index('Date')
+        df_chart = df_chart[['Open', 'High', 'Low', 'Close', 'Volume']].astype(float)
         
-        return df
+        return df_chart
     except Exception as e:
-        print(f"Binance API error: {e}")
+        print(f"Binance chart API error: {e}")
         return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def load_chart_data_yf(symbol, start, end, interval):
+    """從 yfinance 抓取指定週期資料 (短週期僅支援近期)"""
+    try:
+        # yf.download 的 end date 是不包含的
+        end_plus_one = end + timedelta(days=1)
+        data = yf.download(symbol.strip(), start=start, end=end_plus_one, interval=interval)
+        return data
+    except Exception:
+        return pd.DataFrame()
+
+@st.cache_data(ttl=10) # 極短快取用於即時價格
+def get_binance_realtime_data(symbol):
+    """獲取幣安永續合約即時價格與 24h 變動"""
+    try:
+        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+        params = {"symbol": symbol}
+        resp = requests.get(url, params=params, timeout=5)
+        data = resp.json()
+        if isinstance(data, dict) and 'lastPrice' in data:
+            return {
+                'currentPrice': float(data['lastPrice']),
+                'priceChange': float(data['priceChange']),
+                'priceChangePercent': float(data['priceChangePercent']),
+                'high': float(data['highPrice']),
+                'low': float(data['lowPrice']),
+                'volume': float(data['volume'])
+            }
+    except Exception:
+        pass
+    return {}
 
 @st.cache_data(ttl=3600)
 def load_info(symbol):
@@ -198,65 +236,70 @@ def load_tw_monthly_revenue(symbol, token=""):
         return {}
 
 @st.cache_data(ttl=3600)
+def get_full_tdcc_data():
+    """下載並快取完整的集保全市場資料 (檔案約 20-30MB)"""
+    try:
+        url = "https://smart.tdcc.com.tw/opendata/getOD.ashx?id=1-5"
+        df = pd.read_csv(url)
+        df.columns = df.columns.str.strip()
+        if '證券代號' in df.columns:
+            df['證券代號'] = df['證券代號'].astype(str).str.strip()
+        return df
+    except Exception as e:
+        print(f"Error downloading TDCC data: {e}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
 def load_tw_chip_distribution(symbol, token=""):
     try:
         stock_id = symbol.split('.')[0]
-        start_date_str = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
-        url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockHoldingSharesPer&data_id={stock_id}&start_date={start_date_str}"
-        if token: url += f"&token={token}"
+        # 從快取的全局數據中獲取，避免重複下載大檔案
+        df = get_full_tdcc_data()
         
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        res = requests.get(url, headers=headers, timeout=10)
-        res_data = res.json()
-        
-        if res_data.get('msg') != 'success':
-            if 'Your level is free' in res_data.get('msg', ''):
-                return {'error_type': 'free_tier', 'msg': 'API 權限不足'}
+        if df.empty:
+            return {'error_type': 'api_error', 'msg': '無法獲取集保結算所開放資料'}
+            
+        if '證券代號' in df.columns:
+            df_stock = df[df['證券代號'] == stock_id].copy()
+            
+            if not df_stock.empty:
+                data_date = str(df_stock['資料日期'].iloc[0])
+                df_stock['持股分級'] = df_stock['持股分級'].astype(int)
+                
+                df_stock = df_stock[df_stock['持股分級'] <= 15]
+                
+                def categorize_level(level):
+                    if level <= 8: return "散戶 (≤50張)"
+                    elif level <= 11: return "中實戶 (50~400張)"
+                    elif level <= 14: return "大戶 (400~1000張)"
+                    else: return "超級大戶 (>1000張)"
+                    
+                df_stock['Category'] = df_stock['持股分級'].apply(categorize_level)
+                
+                ratio_cols = [col for col in df.columns if '比例' in col]
+                target_col = ratio_cols[0] if ratio_cols else '占集保庫存數比例%'
+                
+                df_stock['percent'] = df_stock[target_col]
+                dist_grouped = df_stock.groupby('Category')['percent'].sum().reset_index()
+                
+                df_large = df_stock[df_stock['持股分級'] == 15]
+                latest_pct = float(df_large['percent'].sum()) if not df_large.empty else 0.0
+                
+                return {
+                    'date': data_date,
+                    'distribution': dist_grouped,
+                    'large_latest_pct': latest_pct,
+                    'diff_pct': 0.0
+                }
             else:
-                return {'error_type': 'api_error', 'msg': res_data.get('msg')}
-            
-        data = res_data.get('data', [])
-        if not data: 
-            return {}
-        
-        df = pd.DataFrame(data)
-        df['HoldingSharesLevel'] = df['HoldingSharesLevel'].astype(int)
-        df = df[df['HoldingSharesLevel'] <= 15]
-        
-        latest_date = df['date'].max()
-        df_latest = df[df['date'] == latest_date].copy()
-        
-        def categorize_level(level):
-            if level <= 8: return "散戶 (≤50張)"
-            elif level <= 11: return "中實戶 (50~400張)"
-            elif level <= 14: return "大戶 (400~1000張)"
-            else: return "超級大戶 (>1000張)"
-            
-        df_latest['Category'] = df_latest['HoldingSharesLevel'].apply(categorize_level)
-        dist_grouped = df_latest.groupby('Category')['percent'].sum().reset_index()
-        
-        df_large = df[df['HoldingSharesLevel'] == 15].sort_values('date').reset_index(drop=True)
-        if len(df_large) >= 2:
-            latest_pct = float(df_large.iloc[-1]['percent'])
-            prev_pct = float(df_large.iloc[-2]['percent'])
-        elif len(df_large) == 1:
-            latest_pct = float(df_large.iloc[-1]['percent'])
-            prev_pct = latest_pct
+                return {'error_type': 'api_error', 'msg': f'找不到 {stock_id} 的集保資料'}
         else:
-            latest_pct = 0.0
-            prev_pct = 0.0
+            return {'error_type': 'api_error', 'msg': '資料格式錯誤 (找不到證券代號)'}
             
-        return {
-            'date': latest_date,
-            'distribution': dist_grouped,
-            'large_latest_pct': latest_pct,
-            'diff_pct': latest_pct - prev_pct
-        }
     except Exception as e:
-        print(f"Error fetching chip distribution: {e}")
+        print(f"Error processing chip distribution: {e}")
         return {}
+
 
 @st.cache_data(ttl=3600)
 def load_tw_chip_data(symbol, total_volume_latest, token=""):
@@ -345,21 +388,112 @@ def calc_return(df, days):
         return ((latest - past) / past) * 100
     return 0.0
 
+def calculate_indicators(df_in, ma_periods, rsi_period):
+    if df_in.empty:
+        return df_in
+        
+    df_res = df_in.copy()
+    
+    # 確保 Close 是 Series
+    close_series = df_res['Close'].iloc[:, 0] if isinstance(df_res['Close'], pd.DataFrame) else df_res['Close']
+    
+    # SMA & Bias
+    for ma in ma_periods:
+        df_res[f'SMA_{ma}'] = close_series.rolling(window=ma).mean()
+        df_res[f'Bias_{ma}'] = (close_series - df_res[f'SMA_{ma}']) / df_res[f'SMA_{ma}'] * 100
+        
+    # Bollinger Bands (20, 2)
+    df_res['ma20'] = close_series.rolling(window=20).mean()
+    df_res['std20'] = close_series.rolling(window=20).std()
+    df_res['bb_upper'] = df_res['ma20'] + (2 * df_res['std20'])
+    df_res['bb_lower'] = df_res['ma20'] - (2 * df_res['std20'])
+    df_res['bb_width'] = (df_res['bb_upper'] - df_res['bb_lower']) / df_res['ma20']
+    df_res['ma20_slope'] = df_res['ma20'].diff()
+    
+    # Volume MA
+    volume_series = df_res['Volume'].iloc[:, 0] if isinstance(df_res['Volume'], pd.DataFrame) else df_res['Volume']
+    df_res['vol_ma'] = volume_series.rolling(window=20).mean()
+    
+    # BB Width Rank (過去 1080 根 K 線的百分位數)
+    def get_width_rank(series, idx, period=1080):
+        start_idx = max(0, idx - period)
+        window = series.iloc[start_idx:idx+1]
+        if len(window) < 50:
+            return 0.5
+        return (window <= series.iloc[idx]).mean()
+    
+    # 計算全量的 width_rank 可能會慢，我們只計算最後 200 筆或全量（如果量不大）
+    # 這裡採用列表生成式配合 Series
+    widths = df_res['bb_width']
+    df_res['bb_width_rank'] = [get_width_rank(widths, i) for i in range(len(widths))]
+
+    # RSI (Wilder's Smoothing)
+    delta = close_series.diff()
+    gain = (delta.where(delta > 0, 0))
+    loss = (-delta.where(delta < 0, 0))
+    
+    avg_gain = gain.ewm(alpha=1/rsi_period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/rsi_period, adjust=False).mean()
+    
+    rs = avg_gain / avg_loss
+    df_res[f'RSI_{rsi_period}'] = 100 - (100 / (1 + rs))
+    
+    # MACD
+    exp1 = close_series.ewm(span=12, adjust=False).mean()
+    exp2 = close_series.ewm(span=26, adjust=False).mean()
+    df_res['MACD_12_26_9'] = exp1 - exp2
+    df_res['MACDs_12_26_9'] = df_res['MACD_12_26_9'].ewm(span=9, adjust=False).mean()
+    df_res['MACDh_12_26_9'] = df_res['MACD_12_26_9'] - df_res['MACDs_12_26_9']
+    
+    # Signal (保持原有的 MA5/MA20 交叉作為基礎信號之一，或者可以根據 BB 修改)
+    df_res['Signal'] = 0.0
+    if 'SMA_5' in df_res.columns and 'SMA_20' in df_res.columns:
+        df_res.loc[df_res['SMA_5'] > df_res['SMA_20'], 'Signal'] = 1.0
+    df_res['Position'] = df_res['Signal'].diff()
+    
+    return df_res
+
 try:
     if market == "虛擬貨幣 (Crypto)":
-        df = load_binance_perpetual(ticker, start_date, end_date)
-        bm_df = load_binance_perpetual(benchmark_ticker, start_date, end_date) if ticker != benchmark_ticker else df.copy()
-        info = {'shortName': f"{ticker} 永續合約", 'sector': '加密貨幣', 'industry': 'DeFi / Blockchain'}
+        # 使用選擇的時間週期來讀取主數據
+        df = load_chart_data_binance(ticker, start_date, end_date, selected_interval)
+        if ticker != benchmark_ticker:
+            bm_df = load_chart_data_binance(benchmark_ticker, start_date, end_date, selected_interval)
+        else:
+            bm_df = df.copy()
+        
+        # 獲取即時價格資訊
+        crypto_realtime = get_binance_realtime_data(ticker)
+        
+        info = {
+            'shortName': f"{ticker} 永續合約", 
+            'sector': '加密貨幣', 
+            'industry': 'DeFi / Blockchain',
+            'currentPrice': crypto_realtime.get('currentPrice'),
+            'regularMarketPrice': crypto_realtime.get('currentPrice'),
+            'dayHigh': crypto_realtime.get('high'),
+            'dayLow': crypto_realtime.get('low')
+        }
         fund_data = {}
     else:
-        df = load_data(ticker, start_date, end_date)
-        bm_df = load_data(benchmark_ticker, start_date, end_date)
+        # yfinance 處理
+        yf_interval_map = {"15m": "15m", "1h": "1h", "2h": "2h", "4h": "4h",
+                           "6h": "6h", "8h": "8h", "12h": "12h", "2d": "5d", "3d": "1wk"}
+        yf_interval = yf_interval_map.get(selected_interval, "1d")
+        yf_valid = ["1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"]
+        
+        if yf_interval not in yf_valid:
+            yf_interval = "1d"
+            
+        df = load_chart_data_yf(ticker, start_date, end_date, yf_interval)
+        bm_df = load_chart_data_yf(benchmark_ticker, start_date, end_date, yf_interval)
         info = load_info(ticker)
         fund_data = load_fundamentals(ticker)
 
     if df.empty:
         st.error("找不到該股票代碼的數據，請檢查輸入是否正確。")
     else:
+        # 處理 MultiIndex columns
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [col[0] for col in df.columns]
         if not bm_df.empty and isinstance(bm_df.columns, pd.MultiIndex):
@@ -383,6 +517,10 @@ try:
         df = df.dropna(subset=['Close', 'Open', 'High', 'Low'])
         if not bm_df.empty:
             bm_df = bm_df.dropna(subset=['Close', 'Open', 'High', 'Low'])
+
+        # --- 計算指標 ---
+        ma_periods = [5, 10, 20, 60, 120]
+        df = calculate_indicators(df, ma_periods, rsi_period)
 
         # --- 顯示最新價格 ---
         if not df.empty:
@@ -564,10 +702,7 @@ try:
                         st.metric("自營商累計", f"{chip_data['dl_5d']:,.0f} 張")
             
             # --- 獨立的大戶籌碼分布區塊 ---
-            if chip_dist and chip_dist.get('error_type') == 'free_tier':
-                with st.expander("📊 主力籌碼分布", expanded=True):
-                    st.warning("⚠️ **FinMind API 限制**：目前使用的免費額度無法抓取「集保戶股權分散表」。\n\n若您有 FinMind 贊助會員，請在左側面板輸入您的 **API Token** 來解鎖大戶籌碼分布圖表。")
-            elif chip_dist and chip_dist.get('error_type') == 'api_error':
+            if chip_dist and chip_dist.get('error_type') == 'api_error':
                 with st.expander("📊 主力籌碼分布", expanded=True):
                     st.error(f"獲取資料失敗: {chip_dist.get('msg')}")
             elif chip_dist and not chip_dist.get('distribution', pd.DataFrame()).empty:
@@ -576,11 +711,10 @@ try:
                     
                     with col_dist_text:
                         st.markdown("#### 股權分散狀況")
-                        st.info("台股集保戶股權資料每週更新一次。")
+                        st.info("台股集保戶股權資料每週更新一次 (資料來源: 集保結算所開放資料)。")
                         
                         st.metric("超級大戶 (>1000張) 比例", 
-                                f"{chip_dist['large_latest_pct']:.2f}%", 
-                                f"{chip_dist['diff_pct']:+.2f}% (較上週)")
+                                f"{chip_dist['large_latest_pct']:.2f}%")
                         
                         st.markdown("---")
                         dist_df = chip_dist['distribution']
@@ -615,20 +749,7 @@ try:
 
         # --- 計算指標 (新增乖離率 Bias) ---
         ma_periods = [5, 10, 20, 60, 120]
-        for ma in ma_periods:
-            df.ta.sma(length=ma, append=True)
-            # 新增計算乖離率 (Bias Ratio)
-            if f'SMA_{ma}' in df.columns:
-                df[f'Bias_{ma}'] = (df['Close'] - df[f'SMA_{ma}']) / df[f'SMA_{ma}'] * 100
-                
-        df.ta.rsi(length=rsi_period, append=True)
-        df.ta.macd(append=True)
-
-        # --- 策略邏輯 ---
-        df['Signal'] = 0.0
-        if 'SMA_5' in df.columns and 'SMA_20' in df.columns:
-            df.loc[df['SMA_5'] > df['SMA_20'], 'Signal'] = 1.0
-        df['Position'] = df['Signal'].diff()
+        df = calculate_indicators(df, ma_periods, rsi_period)
 
         # --- 乖離率分析面板 ---
         try:
@@ -650,181 +771,123 @@ try:
         except Exception as e:
             pass
 
-        # --- 策略建議 ---
-        st.markdown("### 💡 趨勢與策略建議")
+        # --- 策略建議 (根據 strategy_bb.py 邏輯) ---
+        st.markdown("### 💡 趨勢與策略建議 (Bollinger Bands 策略)")
         try:
             latest_row = df.iloc[-1]
-            c_price = float(latest_row['Close'].iloc[0]) if isinstance(latest_row['Close'], pd.Series) else float(latest_row['Close'])
-            ma5 = float(latest_row['SMA_5'])
-            ma10 = float(latest_row['SMA_10'])
-            ma20 = float(latest_row['SMA_20'])
-            ma60 = float(latest_row['SMA_60'])
-            ma120 = float(latest_row['SMA_120'])
+            prev_row = df.iloc[-2] if len(df) > 1 else latest_row
             
-            latest_rsi = float(latest_row[f'RSI_{rsi_period}']) if f'RSI_{rsi_period}' in latest_row else 50
-            latest_macd = float(latest_row['MACD_12_26_9']) if 'MACD_12_26_9' in latest_row else 0
+            c_price = float(latest_row['Close'].iloc[0]) if isinstance(latest_row['Close'], pd.Series) else float(latest_row['Close'])
+            h_price = float(latest_row['High'].iloc[0]) if isinstance(latest_row['High'], pd.Series) else float(latest_row['High'])
+            l_price = float(latest_row['Low'].iloc[0]) if isinstance(latest_row['Low'], pd.Series) else float(latest_row['Low'])
+            v_volume = float(latest_row['Volume'].iloc[0]) if isinstance(latest_row['Volume'], pd.Series) else float(latest_row['Volume'])
+            
+            ma20 = float(latest_row['ma20'])
+            std20 = float(latest_row['std20'])
+            bb_upper = float(latest_row['bb_upper'])
+            bb_lower = float(latest_row['bb_lower'])
+            bb_width = float(latest_row['bb_width'])
+            bb_width_rank = float(latest_row['bb_width_rank'])
+            ma20_slope = float(latest_row['ma20_slope'])
+            vol_ma = float(latest_row['vol_ma'])
+            
+            prev_ma20_slope = float(prev_row['ma20_slope'])
+            prev_bb_width = float(prev_row['bb_width'])
+            
+            # 狀態判斷
+            is_squeeze = bb_width_rank <= 0.20
+            
+            # 取得最近 5 根的寬度排位以判斷是否從擠壓中突破
+            recent_ranks = df['bb_width_rank'].tail(6).iloc[:-1] # 前 5 根
+            recent_min_rank = recent_ranks.min() if not recent_ranks.empty else bb_width_rank
+            
+            width_increasing = bb_width > prev_bb_width
+            is_expansion_up = recent_min_rank <= 0.20 and width_increasing and h_price >= bb_upper * 0.995 and c_price > float(prev_row['Close'].iloc[0] if isinstance(prev_row['Close'], pd.Series) else prev_row['Close'])
+            is_expansion_down = recent_min_rank <= 0.20 and width_increasing and l_price <= bb_lower * 1.005 and c_price < float(prev_row['Close'].iloc[0] if isinstance(prev_row['Close'], pd.Series) else prev_row['Close'])
+            
+            is_uptrend = ma20_slope > 0 and prev_ma20_slope > 0 and c_price > ma20 and not is_squeeze
+            pullback_up = is_uptrend and l_price <= ma20 + (std20 * 0.5)
+            
+            is_downtrend = ma20_slope < 0 and prev_ma20_slope < 0 and c_price < ma20 and not is_squeeze
+            pullback_down = is_downtrend and h_price >= ma20 - (std20 * 0.5)
+            
+            # 評分系統
+            score_hot = 0
+            reasons_hot = []
+            score_weak = 0
+            reasons_weak = []
+
+            if is_squeeze:
+                if c_price >= ma20:
+                    score_hot += 2
+                    reasons_hot.append("⏳收斂/擠壓(中軌上)")
+                else:
+                    score_weak += 2
+                    reasons_weak.append("⏳收斂/擠壓(中軌下)")
+
+            if is_expansion_up:
+                score_hot += 5
+                reasons_hot.append("🚀發散/向上突破")
+
+            if is_expansion_down:
+                score_weak += 5
+                reasons_weak.append("💀發散/向下突破")
+
+            if is_uptrend and not is_expansion_up:
+                score_hot += 3
+                reason = "📈多頭趨勢(回歸中軌)" if pullback_up else "📈多頭趨勢"
+                reasons_hot.append(reason)
+
+            if is_downtrend and not is_expansion_down:
+                score_weak += 3
+                reason = "📉空頭趨勢(回歸中軌)" if pullback_down else "📉空頭趨勢"
+                reasons_weak.append(reason)
+
+            if v_volume > (vol_ma * 1.5):
+                if score_hot > 0: score_hot += 1; reasons_hot.append("🔥🔥放量")
+                if score_weak > 0: score_weak += 1; reasons_weak.append("🔥🔥放量")
+
+            final_type = 'HOT' if score_hot >= score_weak else 'WEAK'
+            score = score_hot if final_type == 'HOT' else score_weak
+            reasons = reasons_hot if final_type == 'HOT' else reasons_weak
+            
+            tier = "Tier 0 (極強)" if score >= 5 else ("Tier 1 (強)" if score >= 3 else "Tier 2 (觀察)")
             
             col_s1, col_s2, col_s3 = st.columns(3)
             
             with col_s1:
-                if c_price > ma5 > ma20 > ma60:
-                    st.success("🟢 **短線偏多**: 價格 > 5日線 > 20日線 > 60日線")
-                elif c_price < ma5 < ma20 < ma60:
-                    st.error("🔴 **短線偏空**: 價格 < 5日線 < 20日線 < 60日線")
-                else:
-                    st.warning("🟡 **短線盤整**: 短期均線糾結或未達明確多空排列")
-                    
+                st.metric("評級等級", tier)
             with col_s2:
-                if c_price > ma60 > ma120:
-                    st.success("🟢 **長線偏多**: 價格 > 60日線 > 120日線")
-                elif c_price < ma60 < ma120:
-                    st.error("🔴 **長線偏空**: 價格 < 60日線 < 120日線")
-                else:
-                    st.warning("🟡 **長線盤整**: 長期均線未達明確多空排列")
-                    
+                status_color = "green" if final_type == 'HOT' else "red"
+                st.markdown(f"**方向:** :{status_color}[{final_type}]")
+                st.markdown(f"**綜合評分:** {score}")
             with col_s3:
-                if latest_rsi > 50 and latest_macd > 0:
-                    st.success(f"🟢 **動能偏多**: RSI({latest_rsi:.1f}) > 50 且 MACD > 0")
-                elif latest_rsi < 50 and latest_macd < 0:
-                    st.error(f"🔴 **動能偏空**: RSI({latest_rsi:.1f}) < 50 且 MACD < 0")
-                else:
-                    st.warning(f"🟡 **動能盤整**: RSI({latest_rsi:.1f}) 與 MACD 無強勢方向")
+                st.markdown("**觸發特徵:**")
+                for r in reasons:
+                    st.markdown(f"- {r}")
+            
+            if not reasons:
+                st.info("目前無明顯布林帶特徵觸發。")
                     
             # --- 多頭進場區間 ---
-            st.markdown("#### 🎯 多頭進場區間參考")
-            
-            short_upper = max(ma5, ma10)
-            short_lower = min(ma5, ma10)
-            short_stop = ma10 * 0.98
-            
-            long_upper = max(ma20, ma60)
-            long_lower = min(ma20, ma60)
-            long_stop = ma60 * 0.98
-            
+            st.markdown("#### 🎯 策略參考區間")
             col_in1, col_in2 = st.columns(2)
             
             with col_in1:
-                st.info(f"**⚡ 短線進場區間**\n\n建議佈局: **{short_lower:.2f} ~ {short_upper:.2f}** \n\n防守停損: **{short_stop:.2f}** ")
+                st.info(f"**📈 布林中軌 (MA20)**: {ma20:.2f}\n\n**帶寬排位**: {bb_width_rank:.1%}")
                 
             with col_in2:
-                st.info(f"**🐢 長線進場區間**\n\n建議佈局: **{long_lower:.2f} ~ {long_upper:.2f}** \n\n防守停損: **{long_stop:.2f}** ")
+                st.info(f"**🚀 上軌 (壓力)**: {bb_upper:.2f}\n\n**💀 下軌 (支撐)**: {bb_lower:.2f}")
 
-        except Exception:
-            st.info("資料不足以計算長短線趨勢與進場區間，請確認所選日期範圍大於 120 天。")
+        except Exception as e:
+            st.info(f"資料不足以計算 BB 策略建議，請確認所選日期範圍大於 20 天。 (錯誤: {e})")
             
         st.divider()
 
         # --- 顯示主要圖表 ---
         st.subheader(f"{ticker} 股價與技術指標")
         
-        # --- 自定義時間週期選擇 ---
-        interval_options = ["15m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "2d", "3d"]
-        interval_labels = ["15M", "1H", "2H", "4H", "6H", "8H", "12H", "1D", "2D", "3D"]
-        
-        selected_interval_label = st.selectbox(
-            "選擇 K 線時間週期", 
-            interval_labels, 
-            index=7,  # 預設 1D
-            help="注意：美股/台股使用 yfinance，短週期 (< 1D) 僅支援近 60 天資料；虛擬貨幣透過 Binance API 支援完整歷史。"
-        )
-        selected_interval = interval_options[interval_labels.index(selected_interval_label)]
-        
-        # 根據選擇的週期重新載入圖表資料
-        @st.cache_data(ttl=3600)
-        def load_chart_data_binance(symbol, start, end, interval):
-            """從 Binance 永續合約抓取指定週期 K 線"""
-            try:
-                all_data = []
-                start_ts = int(pd.Timestamp(start).timestamp() * 1000)
-                end_ts = int(pd.Timestamp(end).timestamp() * 1000)
-                
-                while start_ts < end_ts:
-                    url = "https://fapi.binance.com/fapi/v1/klines"
-                    params = {
-                        "symbol": symbol,
-                        "interval": interval,
-                        "startTime": start_ts,
-                        "endTime": end_ts,
-                        "limit": 1500
-                    }
-                    resp = requests.get(url, params=params, timeout=10)
-                    data = resp.json()
-                    
-                    if not data or isinstance(data, dict):
-                        break
-                    
-                    all_data.extend(data)
-                    start_ts = data[-1][0] + 1
-                    
-                    if len(data) < 1500:
-                        break
-                
-                if not all_data:
-                    return pd.DataFrame()
-                    
-                df_chart = pd.DataFrame(all_data, columns=[
-                    'Open_time', 'Open', 'High', 'Low', 'Close', 'Volume',
-                    'Close_time', 'Quote_volume', 'Trades', 'Taker_buy_base',
-                    'Taker_buy_quote', 'Ignore'
-                ])
-                
-                df_chart['Date'] = pd.to_datetime(df_chart['Open_time'], unit='ms')
-                df_chart = df_chart.set_index('Date')
-                df_chart = df_chart[['Open', 'High', 'Low', 'Close', 'Volume']].astype(float)
-                
-                return df_chart
-            except Exception as e:
-                print(f"Binance chart API error: {e}")
-                return pd.DataFrame()
-        
-        @st.cache_data(ttl=3600)
-        def load_chart_data_yf(symbol, start, end, interval):
-            """從 yfinance 抓取指定週期資料 (短週期僅支援近期)"""
-            try:
-                data = yf.download(symbol, start=start, end=end, interval=interval)
-                return data
-            except Exception:
-                return pd.DataFrame()
-        
-        # 載入圖表用資料
-        if selected_interval == "1d":
-            df_chart = df.copy()
-        else:
-            if market == "虛擬貨幣 (Crypto)":
-                df_chart = load_chart_data_binance(ticker, start_date, end_date, selected_interval)
-            else:
-                # yfinance 短週期限制：1m(7天), 2/5/15/30m(60天), 60m/1h(730天)
-                yf_interval_map = {"15m": "15m", "1h": "1h", "2h": "2h", "4h": "4h",
-                                   "6h": "6h", "8h": "8h", "12h": "12h", "2d": "5d", "3d": "1wk"}
-                yf_interval = yf_interval_map.get(selected_interval, "1d")
-                # yfinance 僅支援部分週期，不支援的降回 1d
-                yf_valid = ["1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"]
-                if yf_interval not in yf_valid:
-                    st.warning(f"⚠️ yfinance 不支援 `{selected_interval}` 週期，將使用日線 (1D) 替代。")
-                    df_chart = df.copy()
-                else:
-                    df_chart = load_chart_data_yf(ticker, start_date, end_date, yf_interval)
-                    if df_chart.empty:
-                        st.warning(f"⚠️ 無法取得 `{selected_interval}` 週期資料（可能超出 yfinance 歷史限制），改用日線。")
-                        df_chart = df.copy()
-            
-            # 處理 MultiIndex columns
-            if not df_chart.empty and isinstance(df_chart.columns, pd.MultiIndex):
-                df_chart.columns = [col[0] for col in df_chart.columns]
-            if not df_chart.empty:
-                df_chart = df_chart.loc[:, ~df_chart.columns.duplicated()]
-                df_chart = df_chart.dropna(subset=['Close', 'Open', 'High', 'Low'])
-                
-                # 重新計算該週期的技術指標
-                for ma in ma_periods:
-                    df_chart.ta.sma(length=ma, append=True)
-                df_chart.ta.rsi(length=rsi_period, append=True)
-                df_chart.ta.macd(append=True)
-                
-                df_chart['Signal'] = 0.0
-                if 'SMA_5' in df_chart.columns and 'SMA_20' in df_chart.columns:
-                    df_chart.loc[df_chart['SMA_5'] > df_chart['SMA_20'], 'Signal'] = 1.0
-                df_chart['Position'] = df_chart['Signal'].diff()
+        df_chart = df.copy()
         
         tab1, tab2, tab3 = st.tabs(["📊 綜合分析", "🕯️ 純 K 線圖", "📈 數據與回測"])
         
@@ -841,6 +904,11 @@ try:
             for ma, color in ma_colors.items():
                 if f'SMA_{ma}' in df_chart.columns:
                     fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'SMA_{ma}'], name=f'SMA {ma}', line=dict(color=color, width=1)), row=1, col=1)
+
+            # Bollinger Bands
+            if 'bb_upper' in df_chart.columns and 'bb_lower' in df_chart.columns:
+                fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['bb_upper'], name='BB Upper', line=dict(color='gray', width=1, dash='dash')), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['bb_lower'], name='BB Lower', line=dict(color='gray', width=1, dash='dash'), fill='tonexty', fillcolor='rgba(128, 128, 128, 0.1)'), row=1, col=1)
 
             buy_signals = df_chart[df_chart['Position'] == 1]
             sell_signals = df_chart[df_chart['Position'] == -1]
@@ -884,6 +952,11 @@ try:
             for ma, color in ma_colors.items():
                 if f'SMA_{ma}' in df_chart.columns:
                     fig_k.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'SMA_{ma}'], name=f'SMA {ma}', line=dict(color=color, width=1)))
+            
+            # Bollinger Bands
+            if 'bb_upper' in df_chart.columns and 'bb_lower' in df_chart.columns:
+                fig_k.add_trace(go.Scatter(x=df_chart.index, y=df_chart['bb_upper'], name='BB Upper', line=dict(color='gray', width=1, dash='dash')))
+                fig_k.add_trace(go.Scatter(x=df_chart.index, y=df_chart['bb_lower'], name='BB Lower', line=dict(color='gray', width=1, dash='dash'), fill='tonexty', fillcolor='rgba(128, 128, 128, 0.1)'))
             
             fig_k.update_layout(height=600, xaxis_rangeslider_visible=False, showlegend=True)
             if selected_interval in ['1d', '2d', '3d']:
