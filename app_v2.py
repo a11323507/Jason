@@ -88,17 +88,28 @@ if st.sidebar.button("🔄 手動更新資料 (清除快取)"):
 def load_chart_data_binance(symbol, start, end, interval):
     """從 Binance 永續合約抓取指定週期 K 線"""
     try:
+        # Binance 不支援 2d 週期，進行修正
+        if interval == "2d":
+            interval = "1d"
+            
         all_data = []
+        # 使用 pd.Timestamp 處理日期並轉為 UTC 時間戳 (毫秒)
         start_ts = int(pd.Timestamp(start).timestamp() * 1000)
-        # 結束時間設為現在
-        now_ts = int(datetime.utcnow().timestamp() * 1000)
+        # 使用 pd.Timestamp.now() 獲取正確的當前 UTC 時間戳
+        now_ts = int(pd.Timestamp.now().timestamp() * 1000)
+        
+        # 結束時間設為該日期的 23:59:59
         end_ts = int((pd.Timestamp(end) + timedelta(days=1)).timestamp() * 1000) - 1
         request_end_ts = min(end_ts, now_ts)
+        
+        # 如果開始時間大於結束時間，調整開始時間以確保能抓到資料 (例如抓最近 100 根)
+        if start_ts >= request_end_ts:
+            start_ts = request_end_ts - (100 * 24 * 3600 * 1000) # 預設抓 100 天前
         
         while start_ts < request_end_ts:
             url = "https://fapi.binance.com/fapi/v1/klines"
             params = {
-                "symbol": symbol,
+                "symbol": symbol.strip().upper(),
                 "interval": interval,
                 "startTime": start_ts,
                 "endTime": request_end_ts,
@@ -108,6 +119,9 @@ def load_chart_data_binance(symbol, start, end, interval):
             data = resp.json()
             
             if not data or isinstance(data, dict):
+                # 如果有錯誤訊息，印出以便調試 (Streamlit log)
+                if isinstance(data, dict):
+                    print(f"Binance API Error: {data}")
                 break
             
             all_data.extend(data)
@@ -853,7 +867,12 @@ try:
             
             tier = "Tier 0 (極強)" if score >= 5 else ("Tier 1 (強)" if score >= 3 else "Tier 2 (觀察)")
             
-            col_s1, col_s2, col_s3 = st.columns(3)
+            # 獲取 RSI 資訊
+            current_rsi = float(latest_row[f'RSI_{rsi_period}']) if f'RSI_{rsi_period}' in latest_row else 50
+            rsi_status = "📈 買氣增強" if current_rsi > 50 else "📉 買氣偏弱"
+            rsi_delta = current_rsi - 50
+            
+            col_s1, col_s2, col_s3, col_s4 = st.columns(4)
             
             with col_s1:
                 st.metric("評級等級", tier)
@@ -862,6 +881,9 @@ try:
                 st.markdown(f"**方向:** :{status_color}[{final_type}]")
                 st.markdown(f"**綜合評分:** {score}")
             with col_s3:
+                st.metric(f"RSI ({selected_interval_label})", f"{current_rsi:.1f}", f"{rsi_delta:+.1f}")
+                st.markdown(f"**狀態:** {rsi_status}")
+            with col_s4:
                 st.markdown("**觸發特徵:**")
                 for r in reasons:
                     st.markdown(f"- {r}")
