@@ -869,15 +869,27 @@ try:
             if not reasons:
                 st.info("目前無明顯布林帶特徵觸發。")
                     
-            # --- 多頭進場區間 ---
+            # --- 策略參考區間 ---
             st.markdown("#### 🎯 策略參考區間")
-            col_in1, col_in2 = st.columns(2)
+            col_strat1, col_strat2 = st.columns(2)
             
-            with col_in1:
+            with col_strat1:
                 st.info(f"**📈 布林中軌 (MA20)**: {ma20:.2f}\n\n**帶寬排位**: {bb_width_rank:.1%}")
-                
-            with col_in2:
                 st.info(f"**🚀 上軌 (壓力)**: {bb_upper:.2f}\n\n**💀 下軌 (支撐)**: {bb_lower:.2f}")
+                
+            with col_strat2:
+                st.info("**⚡ 短線策略 (MA Trend)**")
+                if is_uptrend:
+                    ma5 = float(latest_row['SMA_5'])
+                    ma10 = float(latest_row['SMA_10'])
+                    st.success("✅ **符合進場條件 (多頭趨勢)**")
+                    st.markdown(f"- **建議佈局**: `{min(ma5, ma10):.2f}` ~ `{max(ma5, ma10):.2f}`")
+                    st.markdown(f"- **防守停損**: `{ma10 * 0.98:.2f}` (10日線 -2%)")
+                else:
+                    st.warning("⚠️ **目前未符合短線多頭條件**")
+                    st.markdown("- **建議佈局**: 暫無建議")
+                    st.markdown("- **防守停損**: 暫無建議")
+                st.caption("短線策略僅在「多頭趨勢」特徵觸發時建議進場。")
 
         except Exception as e:
             st.info(f"資料不足以計算 BB 策略建議，請確認所選日期範圍大於 20 天。 (錯誤: {e})")
