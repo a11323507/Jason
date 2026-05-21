@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>青森旅遊互動指南 | Aomori Travel Guide</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background-color: #F9F7F3; color: #2B2D42; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif; overflow-x: hidden; }
+        .glass-panel { background: rgba(255, 255, 255, 0.85); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.6); }
+        .card-hover { transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
+        .card-hover:hover { transform: translateY(-6px); box-shadow: 0 12px 30px rgba(0,0,0,0.08); }
+        .filter-btn { transition: all 0.3s ease; }
+        .filter-btn.active { background-color: #E63946; color: white; border-color: #E63946; box-shadow: 0 4px 14px rgba(230,57,70,0.3); }
+        .chart-container { position: relative; width: 100%; max-width: 600px; margin-left: auto; margin-right: auto; height: 40vh; max-height: 400px; }
+        @media (max-width: 640px) { .chart-container { height: 35vh; max-height: 300px; } }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #F1F1F1; }
+        ::-webkit-scrollbar-thumb { background: #C5C5C5; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #A8A8A8; }
+    </style>
+</head>
+<body class="antialiased min-h-screen flex flex-col">
+
+    <header class="bg-[#2B2D42] text-white pt-16 pb-12 px-6 shadow-lg relative overflow-hidden">
+        <div class="absolute top-[-50px] right-[-50px] text-[15rem] opacity-5 select-none pointer-events-none">🍎</div>
+        <div class="absolute bottom-[-20px] left-[-20px] text-[10rem] opacity-5 select-none pointer-events-none">🍜</div>
+        <div class="max-w-6xl mx-auto relative z-10 text-center">
+            <h1 class="text-4xl md:text-6xl font-bold mb-4 tracking-wider">青森旅遊互動指南</h1>
+            <p class="text-lg md:text-xl text-gray-300 max-w-2xl mx-auto leading-relaxed">
+                探索北國的極致旅遊體驗。從壯麗的自然景觀到靈魂美食拉麵，為您精選青森必訪的優質景點與餐廳。
+            </p>
+        </div>
+    </header>
+
+    <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 w-full space-y-16">
+
+        <section id="overview-section" class="scroll-mt-8">
+            <div class="mb-8 text-center max-w-3xl mx-auto">
+                <h2 class="text-3xl font-bold text-[#E63946] mb-4">旅遊版圖概覽</h2>
+                <p class="text-gray-600 text-lg leading-relaxed">
+                    本區塊展示了青森旅遊指南中的景點與餐廳種類分佈。透過視覺化的圓餅圖，您可以快速了解我們為您整理的多元旅遊文化。點擊圖表區塊即可查看各類別的收錄數量，為您的探索之旅提供清晰的輪廓。
+                </p>
+            </div>
+            
+            <div class="glass-panel rounded-3xl p-6 md:p-10 shadow-sm mx-auto max-w-4xl flex flex-col items-center">
+                <div class="w-full flex justify-between items-center mb-6 px-4">
+                    <h3 class="text-xl font-semibold text-gray-800">分類收錄比例</h3>
+                    <span id="total-count-badge" class="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-sm font-medium border border-gray-200">總計 38 處精選</span>
+                </div>
+                <div class="chart-container">
+                    <canvas id="categoryChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <section id="directory-section" class="scroll-mt-8">
+            <div class="mb-10 text-center max-w-3xl mx-auto">
+                <h2 class="text-3xl font-bold text-[#E63946] mb-4">探索精選景點與餐廳</h2>
+                <p class="text-gray-600 text-lg leading-relaxed">
+                    請使用下方的互動式標籤，篩選您感興趣的分類。從濃郁的「津輕拉麵」到壯麗的「自然景觀」，每個分類都為您嚴選了最具代表性的去處。
+                </p>
+            </div>
+
+            <div class="sticky top-0 z-30 bg-[#F9F7F3] pt-4 pb-6 border-b border-gray-200 mb-8 flex flex-col gap-4">
+                <div id="filter-container" class="flex flex-wrap justify-center gap-3">
+                </div>
+                <div id="sub-filter-container" class="flex flex-wrap justify-center gap-3 hidden">
+                </div>
+            </div>
+
+            <div id="restaurant-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="bg-gray-800 text-gray-400 py-8 text-center mt-auto">
+        <p class="text-sm"> Aomori Travel Guide - Ferries, Festivals, Nature, and Soul Food Data Analysis</p>
+    </footer>
+
+    <script>
+        const travelData = [
+            { category: "津輕拉麵", image: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?auto=format&fit=crop&w=800&q=80", icon: "🍜", name: "まるかい (Marukai)", location: "青森市", distance: "距市區約 4 公里", desc: "1956年創業老店，湯頭帶有強烈的魚乾醬油風味。" },
+            { category: "津輕拉麵", image: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?auto=format&fit=crop&w=800&q=80", icon: "🍜", name: "たかはし中華そば店", location: "弘前市", distance: "距市區約 2 公里", desc: "1982年創立，以極度濃郁、充滿力道的魚乾湯頭聞名。" },
+            { category: "津輕拉麵", image: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?auto=format&fit=crop&w=800&q=80", icon: "🍜", name: "くどうラーメン", location: "青森市", distance: "距市區約 4 公里", desc: "1948年創業，早上8點即營業，是當地人喜愛的溫和早晨拉麵。" },
+            { category: "津輕拉麵", image: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?auto=format&fit=crop&w=800&q=80", icon: "🍜", name: "緑屋 (Midoriya)", location: "黑石市", distance: "距市區約 10 公里", desc: "保留昔日理髮廳奇妙裝潢，提供帶有甜味的高湯與手工細麵。" },
+            { category: "津輕拉麵", image: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?auto=format&fit=crop&w=800&q=80", icon: "🍜", name: "中華そば ひらこ屋", location: "青森市", distance: "距市區約 1 公里", desc: "極具人氣的排隊名店，濃郁的魚乾湯頭吸引大量饕客。" },
+            { category: "津輕拉麵", image: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?auto=format&fit=crop&w=800&q=80", icon: "🍜", name: "麺や ゼットン (Zetton)", location: "青森市", distance: "距市區約 2 公里", desc: "青森市內人氣極高的煮干し拉麵名店，體驗當地特色的絕佳選擇。" },
+            
+            { category: "味噌咖哩牛奶", image: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?auto=format&fit=crop&w=800&q=80", icon: "🥛", name: "札幌館 (Sapporokan)", location: "青森市", distance: "距市區約 4 公里", desc: "創始人傾注熱情的名店，木造小木屋風格，香料味層次豐富。" },
+            { category: "味噌咖哩牛奶", image: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?auto=format&fit=crop&w=800&q=80", icon: "🥛", name: "味の札幌 大西", location: "青森市", distance: "距市區約 5 公里", desc: "市區人氣最高的排隊名店，推薦加入隱藏版配料「納豆」增添旨味。" },
+            { category: "味噌咖哩牛奶", image: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?auto=format&fit=crop&w=800&q=80", icon: "🥛", name: "味の札幌 浅利", location: "青森市", distance: "距市區約 4 公里", desc: "麵條較粗且有嚼勁，口味偏辛辣，也有哈瓦那辣椒的「南蠻拉麵」。" },
+            { category: "味噌咖哩牛奶", image: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?auto=format&fit=crop&w=800&q=80", icon: "🥛", name: "かわら (Kawara)", location: "青森市", distance: "距市區約 3 公里", desc: "創始人直傳弟子開設，口味地道，另有加入紫蘇梅的「梅子拉麵」。" },
+            { category: "味噌咖哩牛奶", image: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?auto=format&fit=crop&w=800&q=80", icon: "🥛", name: "ラーメン 蔵 (Ramen Kura)", location: "青森市", distance: "距市區約 2 公里", desc: "湯頭純淨無浮渣，加入白芝麻，強烈推薦加入現磨大蒜昇華風味。" },
+            { category: "味噌咖哩牛奶", image: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?auto=format&fit=crop&w=800&q=80", icon: "🥛", name: "味の札幌 分店", location: "青森市", distance: "距市區約 1 公里", desc: "完美中和味噌與咖哩的濃膩，現炒豆芽菜香氣迷人，讓人一口接一口。" },
+
+            { category: "海鮮與食堂", image: "https://images.unsplash.com/photo-1579584425555-c3ce17fd4351?auto=format&fit=crop&w=800&q=80", icon: "🐟", name: "市場食堂", location: "青森市", distance: "距市區約 5 公里", desc: "位於Auga地下新鮮市場，主打厚切生魚片，海鮮丼性價比極高。" },
+            { category: "海鮮與食堂", image: "https://images.unsplash.com/photo-1579584425555-c3ce17fd4351?auto=format&fit=crop&w=800&q=80", icon: "🐟", name: "丸青食堂", location: "青森市", distance: "距市區約 4 公里", desc: "同位於Auga市場內，除了海鮮定食，高湯熬製的「特製咖哩飯」也是招牌。" },
+            { category: "海鮮與食堂", image: "https://images.unsplash.com/photo-1579584425555-c3ce17fd4351?auto=format&fit=crop&w=800&q=80", icon: "🐟", name: "もりや商店", location: "青森市", distance: "距市區約 5 公里", desc: "當地美食網站評價名列前茅，提供青森縣產海膽、鮭魚卵等時令鮮魚。" },
+            { category: "海鮮與食堂", image: "https://images.unsplash.com/photo-1579584425555-c3ce17fd4351?auto=format&fit=crop&w=800&q=80", icon: "🐟", name: "青森きっちん POPE", location: "青森市", distance: "距市區約 2 公里", desc: "結合大眾食堂與海鮮居酒屋特色，海鮮丼份量十足，深受上班族喜愛。" },
+            { category: "海鮮與食堂", image: "https://images.unsplash.com/photo-1579584425555-c3ce17fd4351?auto=format&fit=crop&w=800&q=80", icon: "🐟", name: "魚っ喰いの田 ワ・ラッセ店", location: "青森市", distance: "距市區約 2 公里", desc: "位於「睡魔之家」一樓，觀賞完祭典燈籠後可直接享用新鮮握壽司。" },
+            { category: "海鮮與食堂", image: "https://images.unsplash.com/photo-1579584425555-c3ce17fd4351?auto=format&fit=crop&w=800&q=80", icon: "🐟", name: "柿源", location: "青森市", distance: "距市區約 5 公里", desc: "歷史悠久的老字號店鋪，提供海鮮丼與多樣化的青森在地鄉土料理。" },
+
+            { category: "居酒屋鄉土料理", image: "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=800&q=80", icon: "🏮", name: "六兵衛 (Rokubee)", location: "青森市", distance: "距市區約 1 公里", desc: "營業超過40年的地下室居酒屋，充滿昭和人情味，名物「貝燒味噌」必點。" },
+            { category: "居酒屋鄉土料理", image: "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=800&q=80", icon: "🏮", name: "食事処/居酒屋 おさない", location: "青森市", distance: "距市區約 3 公里", desc: "青森站前排隊名店，以極品「帆立貝料理」（生食、奶油煎干貝）聞名。" },
+            { category: "居酒屋鄉土料理", image: "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=800&q=80", icon: "🏮", name: "助六 青森駅前店", location: "青森市", distance: "距市區約 2 公里", desc: "炭火串燒與仙貝汁鍋為看板菜單，裝潢融合和風摩登與傳統工藝。" },
+            { category: "居酒屋鄉土料理", image: "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=800&q=80", icon: "🏮", name: "ねぶたの國 たか久", location: "青森市", distance: "距市區約 1 公里", desc: "五感全開的體驗！可一邊享用鄉土料理，一邊欣賞津輕三味線與睡魔祭表演。" },
+            { category: "居酒屋鄉土料理", image: "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=800&q=80", icon: "🏮", name: "七兵衛や (Shichibeeya)", location: "青森市", distance: "距市區約 4 公里", desc: "「無菜單鄉土料理套餐」CP值極高，能輕鬆享受老闆挑選的當季海產。" },
+            { category: "居酒屋鄉土料理", image: "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=800&q=80", icon: "🏮", name: "居酒屋ふく郎", location: "青森市", distance: "距市區約 5 公里", desc: "店內裝飾魄力十足的睡魔燈籠，提供豐富地酒，感受青森祭典的微醺之夜。" },
+
+            { category: "蘋果派與甜點", image: "https://images.unsplash.com/photo-1562007908-17c67e878c88?auto=format&fit=crop&w=800&q=80", icon: "🍎", name: "大正浪漫喫茶室", location: "弘前市", distance: "距市區約 1 公里", desc: "位於弘前大正時代洋館，匯集市內多家名店蘋果派，提供多達9種選擇。" },
+            { category: "蘋果派與甜點", image: "https://images.unsplash.com/photo-1562007908-17c67e878c88?auto=format&fit=crop&w=800&q=80", icon: "🍎", name: "弘大カフェ 成田専蔵珈琲店", location: "弘前市", distance: "距市區約 2 公里", desc: "歷史文化財改建的木造空間，主打手沖咖啡與「紅玉」品種蘋果派。" },
+            { category: "蘋果派與甜點", image: "https://images.unsplash.com/photo-1562007908-17c67e878c88?auto=format&fit=crop&w=800&q=80", icon: "🍎", name: "sweets garden hiroya", location: "弘前市", distance: "距市區約 1 公里", desc: "傳承50年的老字號甜點店，蘋果派外皮酥脆、酸甜適中。" },
+            { category: "蘋果派與甜點", image: "https://images.unsplash.com/photo-1562007908-17c67e878c88?auto=format&fit=crop&w=800&q=80", icon: "🍎", name: "タムラファーム りんごの家", location: "弘前市", distance: "距市區約 4 公里", desc: "位於蘋果公園內，能邊賞蘋果園邊品嚐農場直營的熱騰騰果肉飽滿蘋果派。" },
+            { category: "蘋果派與甜點", image: "https://images.unsplash.com/photo-1562007908-17c67e878c88?auto=format&fit=crop&w=800&q=80", icon: "🍎", name: "シャロン洋菓子店", location: "黑石市", distance: "距市區約 15 公里", desc: "充滿復古情懷的傳統洋菓子店，蘋果派與懷舊奶油蛋糕皆非常受歡迎。" },
+            { category: "蘋果派與甜點", image: "https://images.unsplash.com/photo-1562007908-17c67e878c88?auto=format&fit=crop&w=800&q=80", icon: "🍎", name: "A-Factory (スキップエッグ)", location: "青森市", distance: "距市區約 1 公里", desc: "青森車站海邊的文青商場內，使用青森鮮採蘋果製作甜點，適合等車時休憩。" },
+
+            { category: "青森市區：藝術、歷史與祭典", image: "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=800&q=80", icon: "🏮", name: "睡魔之家 WA-RASSE", location: "青森市", distance: "距市區約 2 公里", desc: "了解青森靈魂「睡魔祭」的完美起點，可近距離觀賞大型睡魔燈籠，並體驗太鼓演奏與吆喝聲。" },
+            { category: "青森市區：藝術、歷史與祭典", image: "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=800&q=80", icon: "🍎", name: "A-FACTORY", location: "青森市", distance: "距市區約 3 公里", desc: "位於站前海濱區，擁有獲優良設計獎的三角屋頂，是購買豐富蘋果製品與伴手禮的絕佳去處。" },
+            { category: "青森市區：藝術、歷史與祭典", image: "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=800&q=80", icon: "🏺", name: "特別史跡 三內丸山遺跡", location: "青森市", distance: "距市區約 1 公里", desc: "日本最大規模的繩文時代聚落遺跡，為世界文化遺產，園區復原了大型掘立柱建築與豎穴式住居。" },
+            { category: "青森市區：藝術、歷史與祭典", image: "https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?auto=format&fit=crop&w=800&q=80", icon: "🖼️", name: "青森縣立美術館", location: "青森市", distance: "距市區約 5 公里", desc: "緊鄰遺跡，建築靈感來自考古溝壕，必看亮點為奈良美智的巨型立體作品「青森犬」。" },
+            { category: "青森市區：藝術、歷史與祭典", image: "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=800&q=80", icon: "⛩️", name: "善知鳥神社", location: "青森市", distance: "距市區約 2 公里", desc: "擁有千年歷史，被視為青森市街的守護神，是感受當地信仰的寧靜聖地。" },
+            { category: "絕美大自然與戶外探索", image: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=800&q=80", icon: "🏞️", name: "白神山地", location: "西津輕郡", distance: "距市區約 10 公里", desc: "世界自然遺產，擁有世界最大規模的山毛櫸原生林，並提供多種難度的健行步道。" },
+            { category: "絕美大自然與戶外探索", image: "https://images.unsplash.com/photo-1437482078695-73f5ca6c96e2?auto=format&fit=crop&w=800&q=80", icon: "💧", name: "青池（十二湖）", location: "深浦町", distance: "距市區約 8 公里", desc: "隱身於白神山地中，池水呈現神秘透亮的鈷藍色，在陽光照射下彷彿閃耀著全息投影般的光芒。" },
+            { category: "絕美大自然與戶外探索", image: "https://images.unsplash.com/photo-1437482078695-73f5ca6c96e2?auto=format&fit=crop&w=800&q=80", icon: "🏞️", name: "奧入瀬溪流", location: "十和田市", distance: "距市區約 60 公里", desc: "綿延 14 公里的散步道，沿途有「銚子大瀑布」與「阿修羅之流」，夏季避暑、秋季賞楓皆宜。" },
+            { category: "絕美大自然與戶外探索", image: "https://images.unsplash.com/photo-1437482078695-73f5ca6c96e2?auto=format&fit=crop&w=800&q=80", icon: "🏞️", name: "十和田湖", location: "十和田市", distance: "距市區約 59 公里", desc: "約 20 萬年前火山噴發形成的破火山口湖，不僅是賞楓名所，還可體驗遊覽船與獨木舟。" },
+            { category: "絕美大自然與戶外探索", image: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=800&q=80", icon: "🏔️", name: "八甲田山", location: "青森市", distance: "距市區約 5 公里", desc: "搭乘纜車可將連峰盡收眼底，享受空中漫步；冬季更有高達 10 公尺的壯觀「雪之迴廊」。" },
+            { category: "絕美大自然與戶外探索", image: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=800&q=80", icon: "🌊", name: "龍飛崎", location: "外ヶ浜町", distance: "距市區約 33 公里", desc: "位於津輕半島最前端的斷崖絕壁，常有強風，天氣好時甚至能跨越津輕海峽遠眺北海道。" },
+            { category: "歷史巡禮與溫泉秘境", image: "https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?auto=format&fit=crop&w=800&q=80", icon: "🏯", name: "弘前城（弘前公園）", location: "弘前市", distance: "距市區約 5 公里", desc: "日本三大賞櫻名勝之一，園內種植約 2,600 棵櫻花樹，天守閣與城門更被指定為國家重要文化財。" },
+            { category: "歷史巡禮與溫泉秘境", image: "https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?auto=format&fit=crop&w=800&q=80", icon: "🌉", name: "鶴之舞橋", location: "鶴田町", distance: "距市區約 31 公里", desc: "全長 300 公尺的日本最長木造三連太鼓橋，優美拱形與自然景觀輝映，被視為戀愛結緣的能量景點。" },
+            { category: "歷史巡禮與溫泉秘境", image: "https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?auto=format&fit=crop&w=800&q=80", icon: "🪨", name: "恐山", location: "むつ市", distance: "距市區約 50 公里", desc: "與高野山、比叡山並列「日本三大靈山」，遍佈荒涼岩石與硫磺泉，特殊的「地獄巡禮」景觀令人難忘。" },
+            { category: "歷史巡禮與溫泉秘境", image: "https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?auto=format&fit=crop&w=800&q=80", icon: "♨️", name: "淺蟲溫泉", location: "青森市", distance: "距市區約 4 公里", desc: "有「東北熱海」之稱，能同時享受陸奧灣海景、絕美夕陽與優質溫泉，車站前還設有免費足湯。" },
+            { category: "歷史巡禮與溫泉秘境", image: "https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?auto=format&fit=crop&w=800&q=80", icon: "🐬", name: "淺蟲水族館", location: "青森市", distance: "距市區約 4 公里", desc: "位於淺蟲溫泉區，提供充滿在地風情的海豚秀與海洋體驗，是適合各年齡層的休閒據點。" },
+            { category: "歷史巡禮與溫泉秘境", image: "https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?auto=format&fit=crop&w=800&q=80", icon: "🖋️", name: "太宰治紀念館「斜陽館」", location: "五所川原市", distance: "距市區約 11 公里", desc: "知名作家太宰治的出生豪宅，保留了明治時代的近代和風建築，並展示其珍貴的直筆原稿。" }
+        ];
+
+        const state = {
+            topFilter: 'All',
+            subFilter: 'All'
+        };
+
+        const restaurantCategories = ["津輕拉麵", "味噌咖哩牛奶", "海鮮與食堂", "居酒屋鄉土料理", "蘋果派與甜點"];
+        const attractionCategories = ["青森市區：藝術、歷史與祭典", "絕美大自然與戶外探索", "歷史巡禮與溫泉秘境"];
+        const topLevelFilters = ['All', '美食餐廳', ...attractionCategories];
+
+        function getCategoryColor(category) {
+            const colors = {
+                "津輕拉麵": "#D97706",
+                "味噌咖哩牛奶": "#F4A261",
+                "海鮮與食堂": "#1D3557",
+                "居酒屋鄉土料理": "#9B2226",
+                "蘋果派與甜點": "#E63946",
+                "青森市區：藝術、歷史與祭典": "#8338EC",
+                "絕美大自然與戶外探索": "#2A9D8F",
+                "歷史巡禮與溫泉秘境": "#6D6875"
+            };
+            return colors[category] || "#457B9D";
+        }
+
+        function initChart() {
+            const ctx = document.getElementById('categoryChart').getContext('2d');
+            
+            const categoryCounts = {};
+            travelData.forEach(r => {
+                categoryCounts[r.category] = (categoryCounts[r.category] || 0) + 1;
+            });
+
+            const labels = Object.keys(categoryCounts);
+            const data = Object.values(categoryCounts);
+            const backgroundColors = labels.map(getCategoryColor);
+
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: data,
+                        backgroundColor: backgroundColors,
+                        borderWidth: 2,
+                        borderColor: '#ffffff',
+                        hoverOffset: 10
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                padding: 20,
+                                font: { family: "'Helvetica Neue', 'Hiragino Sans', sans-serif", size: 14 }
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(43, 45, 66, 0.9)',
+                            padding: 12,
+                            titleFont: { size: 14 },
+                            bodyFont: { size: 14 },
+                            callbacks: {
+                                label: function(context) {
+                                    return ` 收錄 ${context.raw} 處精選`;
+                                }
+                            }
+                        }
+                    },
+                    cutout: '65%'
+                }
+            });
+        }
+
+        function renderFilters() {
+            const container = document.getElementById('filter-container');
+            const subContainer = document.getElementById('sub-filter-container');
+            container.innerHTML = '';
+            subContainer.innerHTML = '';
+
+            topLevelFilters.forEach(cat => {
+                const btn = document.createElement('button');
+                btn.className = `filter-btn px-6 py-2 rounded-full font-medium border-2 text-sm md:text-base outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-2 ${state.topFilter === cat ? 'active' : 'bg-white text-gray-700 border-gray-300 hover:border-[#E63946] hover:text-[#E63946]'}`;
+                btn.textContent = cat === 'All' ? '全部顯示' : cat;
+                
+                btn.addEventListener('click', () => {
+                    state.topFilter = cat;
+                    state.subFilter = 'All'; // Reset sub-filter when switching top filters
+                    renderFilters();
+                    renderGrid();
+                });
+                
+                container.appendChild(btn);
+            });
+
+            if (state.topFilter === '美食餐廳') {
+                subContainer.classList.remove('hidden');
+                const subFilters = ['All', ...restaurantCategories];
+                
+                subFilters.forEach(subCat => {
+                    const btn = document.createElement('button');
+                    btn.className = `filter-btn px-5 py-1.5 rounded-full font-medium border-2 text-sm outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-2 ${state.subFilter === subCat ? 'active' : 'bg-white text-gray-600 border-gray-200 hover:border-[#E63946] hover:text-[#E63946]'}`;
+                    btn.textContent = subCat === 'All' ? '所有美食' : subCat;
+                    
+                    btn.addEventListener('click', () => {
+                        state.subFilter = subCat;
+                        renderFilters();
+                        renderGrid();
+                    });
+                    
+                    subContainer.appendChild(btn);
+                });
+            } else {
+                subContainer.classList.add('hidden');
+            }
+        }
+
+        function renderGrid() {
+            const container = document.getElementById('restaurant-grid');
+            container.innerHTML = '';
+
+            let filteredData = travelData;
+
+            if (state.topFilter === '美食餐廳') {
+                if (state.subFilter === 'All') {
+                    filteredData = travelData.filter(r => restaurantCategories.includes(r.category));
+                } else {
+                    filteredData = travelData.filter(r => r.category === state.subFilter);
+                }
+            } else if (state.topFilter !== 'All') {
+                filteredData = travelData.filter(r => r.category === state.topFilter);
+            }
+
+            if (filteredData.length === 0) {
+                container.innerHTML = '<p class="col-span-full text-center text-gray-500 py-10">沒有找到相符的資料。</p>';
+                return;
+            }
+
+            filteredData.forEach(item => {
+                const card = document.createElement('a');
+                card.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.name + ' ' + item.location)}`;
+                card.target = '_blank';
+                card.rel = 'noopener noreferrer';
+                card.className = 'glass-panel card-hover rounded-2xl flex flex-col h-full border-t border-l border-white shadow-sm relative overflow-hidden group cursor-pointer block no-underline p-0';
+                
+                const iconColor = getCategoryColor(item.category);
+                
+                card.innerHTML = `
+                    <!-- 圖片區塊 -->
+                    <div class="h-48 w-full relative overflow-hidden flex-shrink-0">
+                        <img src="${item.image}" alt="${item.name}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500">
+                        <div class="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent"></div>
+                        <div class="absolute bottom-3 left-4 flex items-center gap-2">
+                            <div class="flex items-center justify-center w-10 h-10 rounded-full text-xl shadow-md bg-white/20 backdrop-blur-md border border-white/30">
+                                ${item.icon}
+                            </div>
+                            <span class="text-xs font-semibold px-3 py-1.5 rounded-full text-white bg-white/20 backdrop-blur-md border border-white/30 shadow-sm">
+                                ${item.category}
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <!-- 內文區塊 -->
+                    <div class="p-5 flex flex-col flex-grow relative z-10 bg-white/40">
+                        <div class="flex flex-wrap gap-2 mb-3">
+                            <span class="text-xs text-gray-600 font-medium flex items-center gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-gray-100">
+                                <svg class="w-3 h-3 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.243-4.243a8 8 0 1111.314 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                                ${item.location}
+                            </span>
+                            <span class="text-xs text-gray-600 font-medium flex items-center gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-gray-100">
+                                <svg class="w-3 h-3 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
+                                ${item.distance}
+                            </span>
+                        </div>
+                        <h3 class="text-xl font-bold text-gray-800 mb-2 group-hover:text-[#E63946] transition-colors duration-300">${item.name}</h3>
+                        <p class="text-gray-600 text-sm leading-relaxed flex-grow">${item.desc}</p>
+                        <div class="mt-4 flex items-center text-sm text-[#E63946] font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                            <span>查看相關資訊</span>
+                            <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                        </div>
+                    </div>
+                `;
+
+                container.appendChild(card);
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initChart();
+            renderFilters();
+            renderGrid();
+            
+            // dynamically update total count
+            const countBadge = document.getElementById('total-count-badge');
+            if (countBadge) {
+                countBadge.textContent = `總計 ${travelData.length} 處精選`;
+            }
+        });
+    </script>
+</body>
+</html>
