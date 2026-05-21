@@ -1,20 +1,168 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
+import numpy as np
 import requests
+import json
 
 # 頁面配置
-st.set_page_config(page_title="股票分析策略模板", layout="wide")
+st.set_page_config(page_title="股票交易計畫儀表板", layout="wide")
+
+# --- 自定義 CSS ---
+st.markdown("""
+<style>
+    /* 全體背景與文字 */
+    .stApp {
+        background-color: #0e1117;
+        color: #d1d4dc;
+    }
+    
+    /* 頂部標頭樣式 */
+    .header-box {
+        background-color: #1e222d;
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid #2b2b43;
+        margin-bottom: 20px;
+    }
+    .price-box {
+        background-color: #ef5350;
+        color: white;
+        padding: 15px;
+        border-radius: 8px;
+        text-align: center;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+    .price-val {
+        font-size: 3rem;
+        font-weight: bold;
+        line-height: 1;
+    }
+    .price-change {
+        font-size: 1.2rem;
+        margin-top: 5px;
+    }
+    
+    /* 區塊卡片樣式 */
+    .plan-card {
+        background-color: #1e222d;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #2b2b43;
+        height: 100%;
+        margin-bottom: 15px;
+    }
+    .plan-title {
+        color: #42a5f5;
+        font-size: 1.3rem;
+        font-weight: bold;
+        border-bottom: 1px solid #2b2b43;
+        padding-bottom: 8px;
+        margin-bottom: 12px;
+        display: flex;
+        align-items: center;
+    }
+    
+    /* 表格樣式優化 */
+    .stTable {
+        font-size: 0.9rem;
+    }
+    
+    /* 側邊欄優化 */
+    section[data-testid="stSidebar"] {
+        background-color: #131722;
+        border-right: 1px solid #2b2b43;
+    }
+    
+    /* 隱藏預設元件 */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
 
 st.title("📈 股票分析策略網頁模板")
 st.markdown("""
 這是一個使用 Streamlit 建立的股票分析模板。您可以輸入股票代碼、選擇日期範圍，並查看技術指標、大盤動量與簡易回測結果。
 """)
 
-# --- 側邊欄設定 ---
+# --- 全球市場熱力圖 ---
+with st.expander("🇺🇸 美股市場熱力圖 (S&P 500)", expanded=False):
+    components.html("""
+        <div class="tradingview-widget-container">
+          <div class="tradingview-widget-container__widget"></div>
+          <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-stock-heatmap.js" async>
+          {
+          "exchanges": [],
+          "dataSource": "SPX500",
+          "grouping": "sector",
+          "blockSize": "market_cap_basic",
+          "blockColor": "change",
+          "locale": "zh_TW",
+          "symbolUrl": "",
+          "colorTheme": "dark",
+          "hasTopBar": false,
+          "isDataSetEnabled": false,
+          "isZoomEnabled": true,
+          "hasSymbolTooltip": true,
+          "width": "100%",
+          "height": "600"
+        }
+          </script>
+        </div>
+    """, height=600)
+
+with st.expander("🇹🇼 台股市場熱力圖 (Taiwan)", expanded=False):
+    components.html("""
+        <div class="tradingview-widget-container">
+          <div class="tradingview-widget-container__widget"></div>
+          <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-stock-heatmap.js" async>
+          {
+          "exchanges": ["TWSE", "TPEX"],
+          "dataSource": "all_stocks",
+          "grouping": "sector",
+          "blockSize": "market_cap_basic",
+          "blockColor": "change",
+          "locale": "zh_TW",
+          "symbolUrl": "",
+          "colorTheme": "dark",
+          "hasTopBar": true,
+          "isDataSetEnabled": false,
+          "isZoomEnabled": true,
+          "hasSymbolTooltip": true,
+          "width": "100%",
+          "height": "600"
+        }
+          </script>
+        </div>
+    """, height=600)
+
+with st.expander("₿ 虛擬貨幣熱力圖 (Crypto)", expanded=False):
+    components.html("""
+        <div class="tradingview-widget-container">
+          <div class="tradingview-widget-container__widget"></div>
+          <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-crypto-coins-heatmap.js" async>
+          {
+          "dataSource": "crypto",
+          "blockSize": "market_cap_calc",
+          "blockColor": "change",
+          "locale": "zh_TW",
+          "symbolUrl": "",
+          "colorTheme": "dark",
+          "hasTopBar": false,
+          "isDataSetEnabled": false,
+          "isZoomEnabled": true,
+          "hasSymbolTooltip": true,
+          "width": "100%",
+          "height": "600"
+        }
+          </script>
+        </div>
+    """, height=600)
+
 st.sidebar.header("參數設定")
 
 market = st.sidebar.selectbox("選擇市場", ["美股 (US)", "台股上市 (TWSE)", "台股上櫃 (OTC)", "虛擬貨幣 (Crypto)"])
@@ -187,6 +335,147 @@ def load_info(symbol):
         return ticker_obj.info
     except Exception:
         return {}
+
+def render_lightweight_chart(df, height=600):
+    """使用 TradingView Lightweight Charts 渲染 K 線圖 (指定版本與穩定載入版)"""
+    if df.empty:
+        st.warning("無數據可顯示圖表")
+        return
+
+    try:
+        # 1. 數據清洗
+        chart_df = df.copy()
+        chart_df.index = pd.to_datetime(chart_df.index)
+        chart_df = chart_df.sort_index()
+        chart_df = chart_df[~chart_df.index.duplicated(keep='last')].reset_index()
+        chart_df['time'] = chart_df['Date'].apply(lambda x: int(x.timestamp()))
+        
+        # 準備 JSON 數據
+        ohlc_data = chart_df.dropna(subset=['Open', 'High', 'Low', 'Close'])[['time', 'Open', 'High', 'Low', 'Close']].rename(columns={
+            'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close'
+        }).to_dict(orient='records')
+        
+        volume_records = []
+        for _, row in chart_df.dropna(subset=['Volume', 'Close', 'Open']).iterrows():
+            volume_records.append({
+                'time': int(row['time']),
+                'value': float(row['Volume']),
+                'color': 'rgba(239, 83, 80, 0.5)' if row['Close'] < row['Open'] else 'rgba(38, 166, 154, 0.5)'
+            })
+        # 均線與指標
+        indicators_data = {}
+        for col in ['EMA_8', 'EMA_13', 'EMA_21', 'EMA_55', 'EMA_100', 'EMA_200', 'bb_upper', 'bb_lower']:
+            if col in chart_df.columns:
+                target_df = chart_df[['time', col]].dropna()
+                if not target_df.empty:
+                    indicators_data[col] = target_df.rename(columns={col: 'value'}).to_dict(orient='records')
+
+
+        markers = []
+        if 'Position' in chart_df.columns:
+            for _, row in chart_df[chart_df['Position'] == 1].iterrows():
+                markers.append({'time': int(row['time']), 'position': 'belowBar', 'color': '#26a69a', 'shape': 'arrowUp', 'text': 'BUY'})
+            for _, row in chart_df[chart_df['Position'] == -1].iterrows():
+                markers.append({'time': int(row['time']), 'position': 'aboveBar', 'color': '#ef5350', 'shape': 'arrowDown', 'text': 'SELL'})
+
+        # 序列化為 JSON
+        js_ind = json.dumps(indicators_data)
+
+        # 2. 構建 HTML (使用指定版本 v4.1.1)
+        html_content = f"""
+        <style>
+            html, body {{ margin: 0; padding: 0; width: 100%; height: 100%; background: #131722; overflow: hidden; }}
+            #chart-container {{ width: 100%; height: {height}px; }}
+            #legend {{
+                position: absolute; left: 12px; top: 12px; z-index: 100;
+                font-family: sans-serif; font-size: 12px; color: #d1d4dc;
+                background: rgba(19, 23, 34, 0.7); padding: 6px; border-radius: 4px; pointer-events: none;
+            }}
+            .l-val {{ color: #2962ff; font-weight: bold; margin-right: 6px; }}
+        </style>
+        <div id="legend">準備載入圖表...</div>
+        <div id="chart-container"></div>
+        <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+        <script>
+            // 等待函式庫載入完成
+            function initChart() {{
+                console.log("Checking LightweightCharts library...");
+                if (typeof LightweightCharts === 'undefined') {{
+                    console.log("Library not ready, retrying in 100ms...");
+                    setTimeout(initChart, 100);
+                    return;
+                }}
+                
+                console.log("Library ready, initializing chart...");
+                const container = document.getElementById('chart-container');
+                const legend = document.getElementById('legend');
+                
+                try {{
+                    const chart = LightweightCharts.createChart(container, {{
+                        layout: {{ background: {{ type: 'solid', color: '#131722' }}, textColor: '#d1d4dc' }},
+                        grid: {{ vertLines: {{ color: '#242733' }}, horzLines: {{ color: '#242733' }} }},
+                        rightPriceScale: {{ borderColor: '#2b2b43' }},
+                        timeScale: {{ borderColor: '#2b2b43', timeVisible: true }},
+                        crosshair: {{ mode: 0 }}
+                    }});
+
+                    const candleSeries = chart.addCandlestickSeries({{
+                        upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
+                        wickUpColor: '#26a69a', wickDownColor: '#ef5350'
+                    }});
+                    
+                    const ohlcData = {json.dumps(ohlc_data)};
+                    if (ohlcData.length > 0) {{
+                        candleSeries.setData(ohlcData);
+                        candleSeries.setMarkers({json.dumps(markers)});
+                    }}
+
+                    const volSeries = chart.addHistogramSeries({{
+                        color: '#26a69a', priceFormat: {{ type: 'volume' }}, priceScaleId: ''
+                    }});
+                    volSeries.priceScale().applyOptions({{ scaleMargins: {{ top: 0.8, bottom: 0 }} }});
+                    volSeries.setData({json.dumps(volume_records)});
+
+                    const indData = {js_ind};
+                    const colors = {{ 'EMA_8': 'orange', 'EMA_13': 'skyblue', 'EMA_21': 'lime', 'EMA_55': 'green', 'EMA_100': 'red', 'EMA_200': 'purple', 'bb_upper': 'rgba(128,128,128,0.4)', 'bb_lower': 'rgba(128,128,128,0.4)' }};
+
+                    
+                    Object.keys(indData).forEach(key => {{
+                        const series = chart.addLineSeries({{
+                            color: colors[key] || '#ccc',
+                            lineWidth: key.includes('bb') ? 1 : 1,
+                            lineStyle: key.includes('bb') ? 2 : 0,
+                            title: key
+                        }});
+                        series.setData(indData[key]);
+                    }});
+
+                    chart.subscribeCrosshairMove(param => {{
+                        if (!param.time || param.point.x < 0) {{
+                            legend.innerHTML = '{ticker}';
+                            return;
+                        }}
+                        const data = param.seriesData.get(candleSeries);
+                        if (data) {{
+                            legend.innerHTML = `O <span class="l-val">${{data.open.toFixed(2)}}</span> H <span class="l-val">${{data.high.toFixed(2)}}</span> L <span class="l-val">${{data.low.toFixed(2)}}</span> C <span class="l-val">${{data.close.toFixed(2)}}</span>`;
+                        }}
+                    }});
+
+                    chart.timeScale().fitContent();
+                    window.addEventListener('resize', () => chart.applyOptions({{ width: container.clientWidth }}));
+                    console.log("Chart initialization successful.");
+                    
+                }} catch (err) {{
+                    console.error("Chart Error:", err);
+                    legend.innerHTML = "圖表渲染錯誤: " + err.message;
+                }}
+            }}
+            initChart();
+        </script>
+        """
+        components.html(html_content, height=height)
+    except Exception as e:
+        st.error(f"準備圖表數據時發生錯誤: {e}")
 
 @st.cache_data(ttl=3600)
 def load_fundamentals(symbol):
@@ -402,7 +691,106 @@ def calc_return(df, days):
         return ((latest - past) / past) * 100
     return 0.0
 
-def calculate_indicators(df_in, ma_periods, rsi_period):
+def find_key_levels(df):
+    """識別支撐與壓力位，標準：(均線與高點重合) 或 (均線與低點重合)"""
+    if df.empty or len(df) < 120: # 增加到 120 以便計算 MA120
+        return {}
+    
+    latest = df.iloc[-1]
+    current_price = float(latest['Close'].iloc[0]) if isinstance(latest['Close'], pd.Series) else float(latest['Close'])
+    
+    ma_values = {
+        'MA5': float(latest['MA5']),
+        'MA10': float(latest['MA10']),
+        'MA20': float(latest['MA20']),
+        'MA60': float(latest['MA60']),
+        'MA120': float(latest['MA120'])
+    }
+    
+    # 尋找最近 120 根 K 線的局部高低點
+    recent_df = df.tail(120)
+    local_highs = recent_df['High'].rolling(window=10, center=True).max().dropna().unique()
+    local_lows = recent_df['Low'].rolling(window=10, center=True).min().dropna().unique()
+    
+    key_resistances = []
+    key_supports = []
+    
+    tolerance = 0.018 # 1.8% 的重合容許誤差
+    
+    for ma_name, ma_val in ma_values.items():
+        # 檢查與高點重合 (壓力)
+        for h in local_highs:
+            if abs(ma_val - h) / h < tolerance:
+                key_resistances.append({'val': round((ma_val + h) / 2, 2), 'desc': f"{ma_name} + 高點重合"})
+        
+        # 檢查與低點重合 (支撐)
+        for l in local_lows:
+            if abs(ma_val - l) / l < tolerance:
+                key_supports.append({'val': round((ma_val + l) / 2, 2), 'desc': f"{ma_name} + 低點重合"})
+
+    # 確保壓力在現價之上，支撐在現價之下，並依距離排序
+    valid_res = sorted([r for r in key_resistances if r['val'] > current_price], key=lambda x: x['val'])
+    valid_sup = sorted([s for s in key_supports if s['val'] < current_price], key=lambda x: x['val'], reverse=True)
+    
+    # 備用邏輯：若無重合點
+    if not valid_res:
+        valid_res = [{'val': round(ma_values['MA20'], 2), 'desc': 'MA20 壓力'}]
+        if ma_values['MA60'] > current_price:
+            valid_res.append({'val': round(ma_values['MA60'], 2), 'desc': 'MA60 壓力'})
+        valid_res.append({'val': round(max(local_highs), 2), 'desc': '波段高點壓力'})
+        valid_res = sorted([r for r in valid_res if r['val'] > current_price], key=lambda x: x['val'])
+
+    if not valid_sup:
+        valid_sup = [{'val': round(ma_values['MA20'], 2), 'desc': 'MA20 支撐'}]
+        if ma_values['MA60'] < current_price:
+            valid_sup.append({'val': round(ma_values['MA60'], 2), 'desc': 'MA60 支撐'})
+        valid_sup.append({'val': round(min(local_lows), 2), 'desc': '波段低點支撐'})
+        valid_sup = sorted([s for s in valid_sup if s['val'] < current_price], key=lambda x: x['val'], reverse=True)
+
+    res1 = valid_res[0] if valid_res else {'val': round(current_price * 1.05, 2), 'desc': '預估壓力1'}
+    res2 = valid_res[1] if len(valid_res) > 1 else {'val': round(res1['val'] * 1.05, 2), 'desc': '預估壓力2'}
+    
+    # 支撐 1 邏輯
+    sup1 = valid_sup[0] if valid_sup else {'val': round(current_price * 0.95, 2), 'desc': '預估支撐1'}
+    
+    # 支撐 2 邏輯：檢查支撐 1 與支撐 2 距離
+    dist_threshold = 0.03 # 距離小於 3% 視為太近
+    
+    potential_sup2 = None
+    if len(valid_sup) > 1:
+        s2 = valid_sup[1]
+        if (sup1['val'] - s2['val']) / sup1['val'] < dist_threshold:
+            # 太近了，嘗試尋找更遠的點 (特別是包含 MA120 的)
+            for s in valid_sup[2:]:
+                if (sup1['val'] - s['val']) / sup1['val'] >= dist_threshold:
+                    potential_sup2 = s
+                    break
+        else:
+            potential_sup2 = s2
+
+    # 如果還是沒找到合適的支撐 2，或者原本就沒有足夠的 valid_sup，則採用 MA120 相關邏輯
+    if potential_sup2 is None:
+        ma120_val = ma_values['MA120']
+        # 尋找靠近 MA120 的波段低點
+        coincident_l = [l for l in local_lows if abs(ma120_val - l) / l < 0.05]
+        if coincident_l:
+            target_val = round((ma120_val + min(coincident_l)) / 2, 2)
+            potential_sup2 = {'val': target_val, 'desc': 'MA120 + 波段低點 (遠端)'}
+        else:
+            potential_sup2 = {'val': round(ma120_val, 2), 'desc': 'MA120 強力支撐'}
+            
+    # 最後檢查：如果 MA120 支撐還是跟支撐 1 太近 (例如股價剛好在均線糾結處)，則強行下調
+    if (sup1['val'] - potential_sup2['val']) / sup1['val'] < dist_threshold:
+        potential_sup2 = {'val': round(sup1['val'] * 0.93, 2), 'desc': '深層波段支撐 (預估)'}
+
+    return {
+        'res1': res1['val'], 'res1_desc': res1['desc'],
+        'res2': res2['val'], 'res2_desc': res2['desc'],
+        'sup1': sup1['val'], 'sup1_desc': sup1['desc'],
+        'sup2': potential_sup2['val'], 'sup2_desc': potential_sup2['desc']
+    }
+
+def calculate_indicators(df_in, ema_periods, rsi_period):
     if df_in.empty:
         return df_in
         
@@ -411,10 +799,17 @@ def calculate_indicators(df_in, ma_periods, rsi_period):
     # 確保 Close 是 Series
     close_series = df_res['Close'].iloc[:, 0] if isinstance(df_res['Close'], pd.DataFrame) else df_res['Close']
     
-    # SMA & Bias
-    for ma in ma_periods:
-        df_res[f'SMA_{ma}'] = close_series.rolling(window=ma).mean()
-        df_res[f'Bias_{ma}'] = (close_series - df_res[f'SMA_{ma}']) / df_res[f'SMA_{ma}'] * 100
+    # 均線: 採用台股常用的 5, 10, 20, 60, 120
+    df_res['MA5'] = close_series.rolling(window=5).mean()
+    df_res['MA10'] = close_series.rolling(window=10).mean()
+    df_res['MA20'] = close_series.rolling(window=20).mean()
+    df_res['MA60'] = close_series.rolling(window=60).mean()
+    df_res['MA120'] = close_series.rolling(window=120).mean()
+    
+    # EMA & Bias (保留原本的 EMA 用於乖離分析)
+    for ma in ema_periods:
+        df_res[f'EMA_{ma}'] = close_series.ewm(span=ma, adjust=False).mean()
+        df_res[f'Bias_{ma}'] = (close_series - df_res[f'EMA_{ma}']) / df_res[f'EMA_{ma}'] * 100
         
     # Bollinger Bands (20, 2)
     df_res['ma20'] = close_series.rolling(window=20).mean()
@@ -428,27 +823,16 @@ def calculate_indicators(df_in, ma_periods, rsi_period):
     volume_series = df_res['Volume'].iloc[:, 0] if isinstance(df_res['Volume'], pd.DataFrame) else df_res['Volume']
     df_res['vol_ma'] = volume_series.rolling(window=20).mean()
     
-    # BB Width Rank (過去 1080 根 K 線的百分位數)
-    def get_width_rank(series, idx, period=1080):
-        start_idx = max(0, idx - period)
-        window = series.iloc[start_idx:idx+1]
-        if len(window) < 50:
-            return 0.5
-        return (window <= series.iloc[idx]).mean()
-    
-    # 計算全量的 width_rank 可能會慢，我們只計算最後 200 筆或全量（如果量不大）
-    # 這裡採用列表生成式配合 Series
+    # BB Width Rank
     widths = df_res['bb_width']
-    df_res['bb_width_rank'] = [get_width_rank(widths, i) for i in range(len(widths))]
+    df_res['bb_width_rank'] = widths.rolling(window=1080, min_periods=50).apply(lambda x: (x <= x[-1]).mean() if len(x) > 0 else 0.5)
 
-    # RSI (Wilder's Smoothing)
+    # RSI
     delta = close_series.diff()
     gain = (delta.where(delta > 0, 0))
     loss = (-delta.where(delta < 0, 0))
-    
     avg_gain = gain.ewm(alpha=1/rsi_period, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1/rsi_period, adjust=False).mean()
-    
     rs = avg_gain / avg_loss
     df_res[f'RSI_{rsi_period}'] = 100 - (100 / (1 + rs))
     
@@ -459,10 +843,9 @@ def calculate_indicators(df_in, ma_periods, rsi_period):
     df_res['MACDs_12_26_9'] = df_res['MACD_12_26_9'].ewm(span=9, adjust=False).mean()
     df_res['MACDh_12_26_9'] = df_res['MACD_12_26_9'] - df_res['MACDs_12_26_9']
     
-    # Signal (保持原有的 MA5/MA20 交叉作為基礎信號之一，或者可以根據 BB 修改)
+    # Signal
     df_res['Signal'] = 0.0
-    if 'SMA_5' in df_res.columns and 'SMA_20' in df_res.columns:
-        df_res.loc[df_res['SMA_5'] > df_res['SMA_20'], 'Signal'] = 1.0
+    df_res.loc[df_res['MA5'] > df_res['MA20'], 'Signal'] = 1.0
     df_res['Position'] = df_res['Signal'].diff()
     
     return df_res
@@ -505,13 +888,29 @@ try:
         fund_data = load_fundamentals(ticker)
 
     if df.empty:
-        st.error("找不到該股票代碼的數據，請檢查輸入是否正確。")
+        st.error(f"找不到股票代碼 `{ticker}` 的數據。可能原因：yfinance 暫時無法獲取該資料、代碼輸入錯誤、或該時段無交易數據。")
+        st.info("提示：若為台股，請確保選擇正確的『上市』或『上櫃』市場。台股上市代碼後綴應為 `.TW`，上櫃為 `.TWO`。")
     else:
-        # 處理 MultiIndex columns
+        # 處理 MultiIndex columns (yfinance 新版常見問題)
         if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [col[0] for col in df.columns]
+            # 嘗試尋找包含技術指標名稱的那一層
+            found = False
+            for i in range(df.columns.nlevels):
+                levels = df.columns.get_level_values(i)
+                if 'Close' in levels:
+                    df.columns = levels
+                    found = True
+                    break
+            # 若沒找到，嘗試傳統的第 0 層
+            if not found:
+                df.columns = [col[0] for col in df.columns]
+        
         if not bm_df.empty and isinstance(bm_df.columns, pd.MultiIndex):
-            bm_df.columns = [col[0] for col in bm_df.columns]
+            for i in range(bm_df.columns.nlevels):
+                levels = bm_df.columns.get_level_values(i)
+                if 'Close' in levels:
+                    bm_df.columns = levels
+                    break
             
         df = df.loc[:, ~df.columns.duplicated()]
         if not bm_df.empty:
@@ -533,63 +932,219 @@ try:
             bm_df = bm_df.dropna(subset=['Close', 'Open', 'High', 'Low'])
 
         # --- 計算指標 ---
-        ma_periods = [5, 10, 20, 60, 120]
-        df = calculate_indicators(df, ma_periods, rsi_period)
+        ema_periods = [8, 13, 21, 55, 100, 200]
+        df = calculate_indicators(df, ema_periods, rsi_period)
+        levels = find_key_levels(df)
 
-        # --- 顯示最新價格 ---
-        if not df.empty:
-            latest_data = df.iloc[-1]
-            prev_data = df.iloc[-2] if len(df) > 1 else latest_data
-            
-            try:
-                latest_close = float(latest_data['Close'].iloc[0]) if isinstance(latest_data['Close'], pd.Series) else float(latest_data['Close'])
-                prev_close = float(prev_data['Close'].iloc[0]) if isinstance(prev_data['Close'], pd.Series) else float(prev_data['Close'])
-                latest_open = float(latest_data['Open'].iloc[0]) if isinstance(latest_data['Open'], pd.Series) else float(latest_data['Open'])
-                latest_high = float(latest_data['High'].iloc[0]) if isinstance(latest_data['High'], pd.Series) else float(latest_data['High'])
-                latest_low = float(latest_data['Low'].iloc[0]) if isinstance(latest_data['Low'], pd.Series) else float(latest_data['Low'])
-                
-                price_change = latest_close - prev_close
-                price_change_pct = (price_change / prev_close) * 100 if prev_close != 0 else 0
-                
-                latest_date_str = latest_data.name.strftime('%Y-%m-%d')
-                
-                st.subheader(f"即時報價: {ticker} (最後更新: {latest_date_str})")
-                pc1, pc2, pc3, pc4 = st.columns(4)
-                pc1.metric("最新收盤價", f"{latest_close:.2f}", f"{price_change:.2f} ({price_change_pct:.2f}%)")
-                pc2.metric("開盤價", f"{latest_open:.2f}")
-                pc3.metric("最高價", f"{latest_high:.2f}")
-                pc4.metric("最低價", f"{latest_low:.2f}")
-                st.divider()
-            except Exception as e:
-                pass 
+        # --- 獲取數據 ---
+        latest_data = df.iloc[-1]
+        prev_data = df.iloc[-2] if len(df) > 1 else latest_data
+        
+        latest_close = float(latest_data['Close'].iloc[0]) if isinstance(latest_data['Close'], pd.Series) else float(latest_data['Close'])
+        prev_close = float(prev_data['Close'].iloc[0]) if isinstance(prev_data['Close'], pd.Series) else float(prev_data['Close'])
+        price_change = latest_close - prev_close
+        price_change_pct = (price_change / prev_close) * 100 if prev_close != 0 else 0
+        latest_date_str = latest_data.name.strftime('%Y-%m-%d')
 
-        # --- 顯示個股資訊 ---
-        if info and ('shortName' in info or 'longName' in info):
-            with st.expander("ℹ️ 個股基本資料", expanded=True):
+        # --- 定義趨勢描述 ---
+        trend_dir = "多頭排列" if latest_data['MA5'] > latest_data['MA20'] > latest_data['MA60'] else "回調整理中"
+        ma_msg = "均線多頭排列" if latest_data['MA5'] > latest_data['MA10'] > latest_data['MA20'] else "均線糾結或空頭"
+        
+        # --- 1. 頁面標題與核心數據 (Header) ---
+        st.markdown(f"""
+        <div class="header-box">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h1 style="margin:0; color:white;">{info.get('shortName', ticker)} <span style="font-size:1.5rem; color:#888;">交易計畫</span></h1>
+                    <div style="background:#2b2b43; padding:4px 10px; border-radius:4px; display:inline-block; margin-top:8px;">市 {ticker.split('.')[0]}</div>
+                </div>
+                <div class="price-box" style="background-color: {'#ef5350' if price_change >= 0 else '#26a69a'}; min-width: 200px;">
+                    <div style="font-size:0.9rem; opacity:0.8;">目前股價</div>
+                    <div class="price-val">{latest_close:.2f}</div>
+                    <div class="price-change">{'▲' if price_change >= 0 else '▼'} {abs(price_change):.2f} ({price_change_pct:.2f}%)</div>
+                </div>
+                <div style="display: flex; gap: 40px; text-align: center;">
+                    <div><div style="color:#888; font-size:0.9rem;">趨勢方向</div><div style="font-size:1.2rem; font-weight:bold;">{trend_dir}</div></div>
+                    <div><div style="color:#888; font-size:0.9rem;">總量</div><div style="font-size:1.2rem; font-weight:bold;">{int(latest_data['Volume']):,}</div></div>
+                    <div><div style="color:#888; font-size:0.9rem;">RSI</div><div style="font-size:1.2rem; font-weight:bold;">{latest_data[f'RSI_{rsi_period}']:.1f}</div></div>
+                </div>
+            </div>
+            <div style="margin-top:15px; font-size:0.9rem; color:#888;">更新日期：{latest_date_str}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # --- 主內容區 (3 欄佈局) ---
+        col_left, col_mid, col_right = st.columns([1, 2, 1])
+
+        with col_left:
+            # 1. 趨勢判斷
+            st.markdown(f"""
+            <div class="plan-card">
+                <div class="plan-title">1. 趨勢判斷</div>
+                <ul style="padding-left:20px; line-height:1.8;">
+                    <li>前波壓力 ({levels.get('res1')}) 測試中</li>
+                    <li>{ma_msg}</li>
+                    <li>量能配合：{'放量' if latest_data['Volume'] > df['Volume'].tail(20).mean() else '縮量'}整理中</li>
+                    <li>趨勢方向：{trend_dir}</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # 2. 關鍵價位
+            st.markdown(f"""
+            <div class="plan-card">
+                <div class="plan-title">2. 關鍵價位</div>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <div style="display:flex; justify-content:space-between;"><span>壓力 2</span><span style="color:#ef5350; font-weight:bold;">{levels.get('res2')}</span></div>
+                    <div style="font-size:0.8rem; color:#888; margin-bottom:4px;">({levels.get('res2_desc')})</div>
+                    <div style="display:flex; justify-content:space-between;"><span>壓力 1</span><span style="color:#ef5350; font-weight:bold;">{levels.get('res1')}</span></div>
+                    <div style="font-size:0.8rem; color:#888; margin-bottom:4px;">({levels.get('res1_desc')})</div>
+                    <div style="display:flex; justify-content:space-between; background:#2b2b43; padding:5px; border-radius:4px;"><span>現價</span><span style="font-weight:bold;">{latest_close:.2f}</span></div>
+                    <div style="display:flex; justify-content:space-between; margin-top:5px;"><span>支撐 1</span><span style="color:#26a69a; font-weight:bold;">{levels.get('sup1')}</span></div>
+                    <div style="font-size:0.8rem; color:#888; margin-bottom:4px;">({levels.get('sup1_desc')})</div>
+                    <div style="display:flex; justify-content:space-between;"><span>支撐 2</span><span style="color:#26a69a; font-weight:bold;">{levels.get('sup2')}</span></div>
+                    <div style="font-size:0.8rem; color:#888; margin-bottom:4px;">({levels.get('sup2_desc')})</div>
+                    <div style="display:flex; justify-content:space-between; border-top:1px solid #2b2b43; pt:5px;"><span>多頭防守線</span><span style="color:#ffb300;">{levels.get('sup1')}</span></div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col_mid:
+            # 3. 技術圖表
+            with st.container(border=True):
+                st.subheader("3. 技術圖表 (日線)")
+                # 使用 subplots 
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                                   vertical_spacing=0.03, 
+                                   row_heights=[0.7, 0.3])
+                
+                # K 線
+                fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
+                
+                # 均線色彩依圖片調整
+                colors = {'MA5': 'gold', 'MA10': 'cyan', 'MA20': 'magenta', 'MA60': 'lime', 'MA120': 'white'}
+                for ma in colors:
+                    if ma in df.columns:
+                        fig.add_trace(go.Scatter(x=df.index, y=df[ma], name=ma, line=dict(color=colors[ma], width=1)), row=1, col=1)
+                
+                # 繪製關鍵價位水平線
+                fig.add_hline(y=levels.get('res1'), line_dash="dash", line_color="#ef5350", annotation_text="壓力1", row=1, col=1)
+                fig.add_hline(y=levels.get('sup1'), line_dash="dash", line_color="#26a69a", annotation_text="支撐1", row=1, col=1)
+                
+                _close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
+                _open = df['Open'].iloc[:, 0] if isinstance(df['Open'], pd.DataFrame) else df['Open']
+                vol_colors = ['#ef5350' if c < o else '#26a69a' for c, o in zip(_close, _open)]
+                fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='成交量', marker_color=vol_colors), row=2, col=1)
+                
+                fig.update_layout(height=550, margin=dict(l=10, r=10, t=10, b=10), showlegend=True, 
+                                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                                  xaxis_rangeslider_visible=False, template="plotly_dark",
+                                  paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(fig, use_container_width=True)
+
+            # 5. 進場計畫
+            st.markdown('<div class="plan-card"><div class="plan-title">5. 進場計畫 (範例)</div>', unsafe_allow_html=True)
+            plan_data = [
+                ["多頭回測", f"在 {levels.get('sup1')} 整理", f"{levels.get('sup1')}~{latest_close:.2f}", f"{levels.get('sup2')}", f"{levels.get('res1')}", "≥2:1"],
+                ["突破進場", f"放量突破 {levels.get('res1')}", f"{levels.get('res1')}~{levels.get('res1')*1.02:.2f}", f"{latest_close:.2f}", f"{levels.get('res2')}", "≥2:1"],
+            ]
+            df_plan = pd.DataFrame(plan_data, columns=["情境", "進場條件", "進場價位", "停損值", "目標", "盈虧比"])
+            st.table(df_plan)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col_right:
+            # 4. 交易策略
+            st.markdown(f"""
+            <div class="plan-card">
+                <div class="plan-title">4. 交易策略</div>
+                <div style="margin-bottom:15px;">
+                    <div style="color:#ef5350; font-weight:bold; margin-bottom:5px;">多頭回測</div>
+                    <div style="font-size:0.85rem; line-height:1.6;">
+                        • 條件：在 {levels.get('sup1')} 支撐附近分批<br>
+                        • 進場：{levels.get('sup1')} ~ {latest_close:.2f} 承接<br>
+                        • 目標：{levels.get('res1')} / {levels.get('res2')}<br>
+                        • 停損：跌破 {levels.get('sup2')}
+                    </div>
+                </div>
+                <div style="border-top: 1px solid #2b2b43; padding-top:15px; margin-bottom:15px;">
+                    <div style="color:#42a5f5; font-weight:bold; margin-bottom:5px;">突破進場</div>
+                    <div style="font-size:0.85rem; line-height:1.6;">
+                        • 條件：放量突破壓力1 ({levels.get('res1')})<br>
+                        • 進場：突破後回測不破 {levels.get('res1')}<br>
+                        • 目標：{levels.get('res2')} / 以上<br>
+                        • 停損：跌破 {latest_close:.2f}
+                    </div>
+                </div>
+                <div style="border-top: 1px solid #2b2b43; padding-top:15px;">
+                    <div style="color:#26a69a; font-weight:bold; margin-bottom:5px;">空頭避險</div>
+                    <div style="font-size:0.85rem; line-height:1.6;">
+                        • 條件：跌破強力支撐 {levels.get('sup2')}<br>
+                        • 動作：減碼或反手放空避險
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # --- 底部區 (風險與紀律) ---
+        st.divider()
+        b_col1, b_col2, b_col3 = st.columns(3)
+        with b_col1:
+            st.markdown("""
+            <div class="plan-card">
+                <div class="plan-title">6. 風險管理</div>
+                <ul style="padding-left:20px; font-size:0.9rem; line-height:1.8;">
+                    <li>單筆風險：不超過總資金 2%</li>
+                    <li>停損嚴格執行，不攤平、不加碼</li>
+                    <li>盈虧比建議 ≥ 1:2</li>
+                    <li>避免重大消息發布前後重倉操作</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with b_col2:
+            st.markdown("""
+            <div class="plan-card">
+                <div class="plan-title">7. 執行紀律</div>
+                <div style="font-size:0.9rem; line-height:2;">
+                    ✅ 進場前確認條件達成<br>
+                    ✅ 嚴格執行停損停利<br>
+                    ✅ 不預設立場，順勢操作<br>
+                    ✅ 每日檢討，優化交易計畫
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with b_col3:
+            st.markdown(f"""
+            <div class="plan-card">
+                <div class="plan-title">8. 備註</div>
+                <div style="font-size:0.9rem; line-height:1.8;">
+                    • 前波高點壓力位：{levels.get('res2')}<br>
+                    • 關注 {levels.get('sup1')} 平台支撐力度<br>
+                    • 站回 {levels.get('res1')} 才能確認轉強<br>
+                    • 注意量能是否能有效放大
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<div style='text-align: center; margin-top: 30px;'><h2 style='color: #ffb300; letter-spacing: 5px;'>🎯 順勢操作 · 嚴設停損 · 控管風險 · 紀律執行</h2></div>", unsafe_allow_html=True)
+        st.divider()
+
+        # --- 保留原本的基本面與籌碼面資料 ---
+        with st.expander("ℹ️ 詳細數據與基本面分析", expanded=False):
+            # 顯示個股資訊
+            if info and ('shortName' in info or 'longName' in info):
                 c1, c2, c3, c4 = st.columns(4)
                 name = info.get('shortName') or info.get('longName', 'N/A')
                 c1.metric("公司名稱", name)
                 c2.metric("產業板塊", info.get('sector', 'N/A'))
                 c3.metric("行業別", info.get('industry', 'N/A'))
-                
                 mcap = info.get('marketCap', 0)
-                if mcap and mcap >= 1e12:
-                    mcap_str = f"{mcap/1e12:.2f} 兆"
-                elif mcap and mcap >= 1e8:
-                    mcap_str = f"{mcap/1e8:.2f} 億"
-                else:
-                    mcap_str = str(mcap) if mcap else "N/A"
+                mcap_str = f"{mcap/1e12:.2f} 兆" if mcap >= 1e12 else (f"{mcap/1e8:.2f} 億" if mcap >= 1e8 else str(mcap))
                 c4.metric("市值", mcap_str)
 
-        # --- 產業與相對動量 ---
-        with st.expander("🏢 所屬產業與相對大盤動量", expanded=True):
-            sector = info.get('sector', 'N/A')
-            industry = info.get('industry', 'N/A')
-            
-            st.markdown(f"**產業定位:** `{sector}` ➔ `{industry}`")
-            st.markdown(f"**對標基準 (Benchmark):** `{benchmark_name}`")
-            st.caption("透過比較個股與大盤的漲跌幅，判斷該股票所屬產業鏈的相對強弱（資金動能）。超額報酬 > 0 代表打敗大盤，資金流入跡象明顯。")
-            
+            # 產業與相對動量
+            st.markdown("### 🏢 產業與相對大盤動量")
             if not df.empty and not bm_df.empty:
                 c_m1, c_m2, c_m3 = st.columns(3)
                 
@@ -611,12 +1166,10 @@ try:
                     st.metric("近 20 日動量 (中期)", f"{stock_20d:.2f}%", f"{alpha_20d:+.2f}% (超額報酬)")
                 with c_m3:
                     st.metric("近 60 日動量 (長期)", f"{stock_60d:.2f}%", f"{alpha_60d:+.2f}% (超額報酬)")
-            else:
-                st.info("無法獲取對標大盤資料，暫無法計算相對動量。")
-
-        # --- 顯示基本面資訊 ---
-        if fund_data or market in ["台股上市 (TWSE)", "台股上櫃 (OTC)"]:
-            with st.expander("📊 基本面資訊", expanded=True):
+            
+            # 基本面資訊
+            if fund_data or market in ["台股上市 (TWSE)", "台股上櫃 (OTC)"]:
+                st.markdown("### 📊 基本面數據")
                 f_col1, f_col2 = st.columns(2)
                 
                 with f_col1:
@@ -632,393 +1185,47 @@ try:
                             st.markdown("**月營收 (Revenue) 增長率** (近四月)")
                             for month_str, data in tw_rev_data.items():
                                 val = data['revenue']
-                                if val >= 1e12:
-                                    val_str = f"{val/1e12:.2f} 兆"
-                                elif val >= 1e8:
-                                    val_str = f"{val/1e8:.2f} 億"
-                                elif val >= 1e4:
-                                    val_str = f"{val/1e4:.2f} 萬"
-                                else:
-                                    val_str = f"{val:,.2f}"
-                                    
-                                yoy_val = data['YoY']
-                                mom_val = data['MoM']
-                                yoy_str = f"YoY: {yoy_val:+.2f}%" if pd.notna(yoy_val) else "YoY: N/A"
-                                mom_str = f"MoM: {mom_val:+.2f}%" if pd.notna(mom_val) else "MoM: N/A"
-                                
+                                val_str = f"{val/1e12:.2f} 兆" if val >= 1e12 else (f"{val/1e8:.2f} 億" if val >= 1e8 else (f"{val/1e4:.2f} 萬" if val >= 1e4 else f"{val:,.2f}"))
+                                yoy_str = f"YoY: {data['YoY']:+.2f}%" if pd.notna(data['YoY']) else "YoY: N/A"
+                                mom_str = f"MoM: {data['MoM']:+.2f}%" if pd.notna(data['MoM']) else "MoM: N/A"
                                 st.markdown(f"- **{month_str}**: `{val_str}`  `({yoy_str}, {mom_str})`")
-                        else:
-                            st.markdown("**月營收 (Revenue)**\n\n查無資料")
-                    else:
-                        if fund_data and 'Revenue' in fund_data and not fund_data['Revenue'].empty:
-                            st.markdown("**總營收 (Revenue) 增長率** (近四季)")
-                            for idx, val in fund_data['Revenue'].items():
-                                if val >= 1e12:
-                                    val_str = f"{val/1e12:.2f} 兆"
-                                elif val >= 1e8:
-                                    val_str = f"{val/1e8:.2f} 億"
-                                elif val >= 1e4:
-                                    val_str = f"{val/1e4:.2f} 萬"
-                                else:
-                                    val_str = f"{val:,.2f}"
-                                    
-                                yoy_val = fund_data.get('Revenue_YoY', pd.Series()).get(idx)
-                                qoq_val = fund_data.get('Revenue_QoQ', pd.Series()).get(idx)
-                                
-                                yoy_str = f"YoY: {yoy_val:+.2f}%" if pd.notna(yoy_val) else "YoY: N/A"
-                                qoq_str = f"QoQ: {qoq_val:+.2f}%" if pd.notna(qoq_val) else "QoQ: N/A"
-                                    
-                                st.markdown(f"- **{idx}**: `{val_str}`  `({yoy_str}, {qoq_str})`")
+                    elif fund_data and 'Revenue' in fund_data and not fund_data['Revenue'].empty:
+                        st.markdown("**總營收 (Revenue) 增長率** (近四季)")
+                        for idx, val in fund_data['Revenue'].items():
+                            val_str = f"{val/1e12:.2f} 兆" if val >= 1e12 else (f"{val/1e8:.2f} 億" if val >= 1e8 else (f"{val/1e4:.2f} 萬" if val >= 1e4 else f"{val:,.2f}"))
+                            yoy_val = fund_data.get('Revenue_YoY', pd.Series()).get(idx)
+                            qoq_val = fund_data.get('Revenue_QoQ', pd.Series()).get(idx)
+                            yoy_str = f"YoY: {yoy_val:+.2f}%" if pd.notna(yoy_val) else "YoY: N/A"
+                            qoq_str = f"QoQ: {qoq_val:+.2f}%" if pd.notna(qoq_val) else "QoQ: N/A"
+                            st.markdown(f"- **{idx}**: `{val_str}`  `({yoy_str}, {qoq_str})`")
 
-        # --- 顯示籌碼面分析 (台股專屬) ---
+        # --- 籌碼面分析 (台股專屬) ---
         if market in ["台股上市 (TWSE)", "台股上櫃 (OTC)"]:
             total_vol = float(latest_data['Volume'].iloc[0]) if isinstance(latest_data['Volume'], pd.Series) else float(latest_data['Volume'])
             chip_data = load_tw_chip_data(ticker, total_vol, finmind_token)
             chip_dist = load_tw_chip_distribution(ticker, finmind_token)
             
             if chip_data:
-                with st.expander(f"🎯 主力法人籌碼 (最後更新: {chip_data['date']})", expanded=True):
-                    st.markdown("#### 近一日動向 (單日買賣超)")
+                with st.expander("🎯 主力法人籌碼動向", expanded=False):
+                    st.markdown("#### 近一日與近五日動向")
                     c1, c2, c3, c4 = st.columns(4)
-                    
-                    with c1:
-                        st.markdown("**主力 (三大法人)**")
-                        st.metric("單日", f"{chip_data['mf_net']:,.0f} 張", f"{chip_data['mf_pct']:.2f}% (佔成交)")
-                        st.markdown(f"**力道:** {chip_data['mf_momentum']}")
-                        
-                    with c2:
-                        st.markdown("**外資**")
-                        st.metric("單日", f"{chip_data['fi_net']:,.0f} 張", f"{chip_data['fi_pct']:.2f}% (佔成交)")
-                        st.markdown(f"**力道:** {chip_data['fi_momentum']}")
-                        
-                    with c3:
-                        st.markdown("**投信**")
-                        st.metric("單日", f"{chip_data['it_net']:,.0f} 張", f"{chip_data['it_pct']:.2f}% (佔成交)")
-                        st.markdown(f"**力道:** {chip_data['it_momentum']}")
-                        
-                    with c4:
-                        st.markdown("**自營商**")
-                        st.metric("單日", f"{chip_data['dl_net']:,.0f} 張", f"{chip_data['dl_pct']:.2f}% (佔成交)")
-                        st.markdown(f"**力道:** {chip_data['dl_momentum']}")
+                    with c1: st.metric("主力單日", f"{chip_data['mf_net']:,.0f} 張", f"{chip_data['mf_pct']:.2f}%"); st.write(f"累計: {chip_data['mf_5d']:,.0f}")
+                    with c2: st.metric("外資單日", f"{chip_data['fi_net']:,.0f} 張", f"{chip_data['fi_pct']:.2f}%"); st.write(f"累計: {chip_data['fi_5d']:,.0f}")
+                    with c3: st.metric("投信單日", f"{chip_data['it_net']:,.0f} 張", f"{chip_data['it_pct']:.2f}%"); st.write(f"累計: {chip_data['it_5d']:,.0f}")
+                    with c4: st.metric("自營商單日", f"{chip_data['dl_net']:,.0f} 張", f"{chip_data['dl_pct']:.2f}%"); st.write(f"累計: {chip_data['dl_5d']:,.0f}")
 
-                    st.divider()
-                    
-                    st.markdown("#### 近五日動向 (五日累計)")
-                    c5_1, c5_2, c5_3, c5_4 = st.columns(4)
-                    
-                    with c5_1:
-                        st.metric("主力 (三大法人) 累計", f"{chip_data['mf_5d']:,.0f} 張")
-                    with c5_2:
-                        st.metric("外資累計", f"{chip_data['fi_5d']:,.0f} 張")
-                    with c5_3:
-                        st.metric("投信累計", f"{chip_data['it_5d']:,.0f} 張")
-                    with c5_4:
-                        st.metric("自營商累計", f"{chip_data['dl_5d']:,.0f} 張")
-            
-            # --- 獨立的大戶籌碼分布區塊 ---
-            if chip_dist and chip_dist.get('error_type') == 'api_error':
-                with st.expander("📊 主力籌碼分布", expanded=True):
-                    st.error(f"獲取資料失敗: {chip_dist.get('msg')}")
-            elif chip_dist and not chip_dist.get('distribution', pd.DataFrame()).empty:
-                with st.expander(f"📊 主力籌碼分布 (集保更新日期: {chip_dist['date']})", expanded=True):
-                    col_dist_text, col_dist_chart = st.columns([1, 1.5])
-                    
+            if chip_dist and not chip_dist.get('distribution', pd.DataFrame()).empty:
+                with st.expander(f"📊 主力籌碼分布 (集保: {chip_dist['date']})", expanded=False):
+                    col_dist_text, col_dist_chart = st.columns([1, 1])
                     with col_dist_text:
-                        st.markdown("#### 股權分散狀況")
-                        st.info("台股集保戶股權資料每週更新一次 (資料來源: 集保結算所開放資料)。")
-                        
-                        st.metric("超級大戶 (>1000張) 比例", 
-                                f"{chip_dist['large_latest_pct']:.2f}%")
-                        
-                        st.markdown("---")
+                        st.metric("超級大戶 (>1000張) 比例", f"{chip_dist['large_latest_pct']:.2f}%")
                         dist_df = chip_dist['distribution']
-                        for index, row in dist_df.iterrows():
+                        for _, row in dist_df.iterrows():
                             st.markdown(f"- **{row['Category']}**: `{row['percent']:.2f}%`")
-                            
                     with col_dist_chart:
-                        dist_df = chip_dist['distribution']
-                        colors = {
-                            "散戶 (≤50張)": "#26a69a",
-                            "中實戶 (50~400張)": "#42a5f5",
-                            "大戶 (400~1000張)": "#ffa726",
-                            "超級大戶 (>1000張)": "#ef5350"
-                        }
-                        
-                        fig_pie = go.Figure(data=[go.Pie(
-                            labels=dist_df['Category'], 
-                            values=dist_df['percent'],
-                            hole=0.4,
-                            marker=dict(colors=[colors.get(c, '#888888') for c in dist_df['Category']])
-                        )])
-                        
-                        fig_pie.update_layout(
-                            margin=dict(t=0, b=0, l=0, r=0),
-                            showlegend=True,
-                            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
-                        )
+                        fig_pie = go.Figure(data=[go.Pie(labels=dist_df['Category'], values=dist_df['percent'], hole=0.4)])
+                        fig_pie.update_layout(margin=dict(t=0, b=0, l=0, r=0), showlegend=False)
                         st.plotly_chart(fig_pie, use_container_width=True)
-            else:
-                with st.expander("📊 主力籌碼分布", expanded=True):
-                    st.info("目前暫無集保籌碼分布資料。")
-
-        # --- 計算指標 (新增乖離率 Bias) ---
-        ma_periods = [5, 10, 20, 60, 120]
-        df = calculate_indicators(df, ma_periods, rsi_period)
-
-        # --- 乖離率分析面板 ---
-        try:
-            latest_row = df.iloc[-1]
-            with st.expander("📏 價格乖離率 (Bias Ratio)", expanded=True):
-                st.caption("乖離率衡量股價偏離均線的程度。當正乖離率過大時，代表股價短線可能過熱；當負乖離率過大時，代表股價短線可能超跌。")
-                b1, b2, b3, b4 = st.columns(4)
-                
-                # 取得最新乖離率
-                bias_5 = float(latest_row.get('Bias_5', 0))
-                bias_10 = float(latest_row.get('Bias_10', 0))
-                bias_20 = float(latest_row.get('Bias_20', 0))
-                bias_60 = float(latest_row.get('Bias_60', 0))
-                
-                b1.metric("5日乖離率 (周線)", f"{bias_5:.2f}%")
-                b2.metric("10日乖離率", f"{bias_10:.2f}%")
-                b3.metric("20日乖離率 (月線)", f"{bias_20:.2f}%")
-                b4.metric("60日乖離率 (季線)", f"{bias_60:.2f}%")
-        except Exception as e:
-            pass
-
-        # --- 策略建議 (根據 strategy_bb.py 邏輯) ---
-        st.markdown("### 💡 趨勢與策略建議 (Bollinger Bands 策略)")
-        try:
-            latest_row = df.iloc[-1]
-            prev_row = df.iloc[-2] if len(df) > 1 else latest_row
-            
-            c_price = float(latest_row['Close'].iloc[0]) if isinstance(latest_row['Close'], pd.Series) else float(latest_row['Close'])
-            h_price = float(latest_row['High'].iloc[0]) if isinstance(latest_row['High'], pd.Series) else float(latest_row['High'])
-            l_price = float(latest_row['Low'].iloc[0]) if isinstance(latest_row['Low'], pd.Series) else float(latest_row['Low'])
-            v_volume = float(latest_row['Volume'].iloc[0]) if isinstance(latest_row['Volume'], pd.Series) else float(latest_row['Volume'])
-            
-            ma20 = float(latest_row['ma20'])
-            std20 = float(latest_row['std20'])
-            bb_upper = float(latest_row['bb_upper'])
-            bb_lower = float(latest_row['bb_lower'])
-            bb_width = float(latest_row['bb_width'])
-            bb_width_rank = float(latest_row['bb_width_rank'])
-            ma20_slope = float(latest_row['ma20_slope'])
-            vol_ma = float(latest_row['vol_ma'])
-            
-            prev_ma20_slope = float(prev_row['ma20_slope'])
-            prev_bb_width = float(prev_row['bb_width'])
-            
-            # 狀態判斷
-            is_squeeze = bb_width_rank <= 0.20
-            
-            # 取得最近 5 根的寬度排位以判斷是否從擠壓中突破
-            recent_ranks = df['bb_width_rank'].tail(6).iloc[:-1] # 前 5 根
-            recent_min_rank = recent_ranks.min() if not recent_ranks.empty else bb_width_rank
-            
-            width_increasing = bb_width > prev_bb_width
-            is_expansion_up = recent_min_rank <= 0.20 and width_increasing and h_price >= bb_upper * 0.995 and c_price > float(prev_row['Close'].iloc[0] if isinstance(prev_row['Close'], pd.Series) else prev_row['Close'])
-            is_expansion_down = recent_min_rank <= 0.20 and width_increasing and l_price <= bb_lower * 1.005 and c_price < float(prev_row['Close'].iloc[0] if isinstance(prev_row['Close'], pd.Series) else prev_row['Close'])
-            
-            is_uptrend = ma20_slope > 0 and prev_ma20_slope > 0 and c_price > ma20 and not is_squeeze
-            pullback_up = is_uptrend and l_price <= ma20 + (std20 * 0.5)
-            
-            is_downtrend = ma20_slope < 0 and prev_ma20_slope < 0 and c_price < ma20 and not is_squeeze
-            pullback_down = is_downtrend and h_price >= ma20 - (std20 * 0.5)
-            
-            # 評分系統
-            score_hot = 0
-            reasons_hot = []
-            score_weak = 0
-            reasons_weak = []
-
-            if is_squeeze:
-                if c_price >= ma20:
-                    score_hot += 2
-                    reasons_hot.append("⏳收斂/擠壓(中軌上)")
-                else:
-                    score_weak += 2
-                    reasons_weak.append("⏳收斂/擠壓(中軌下)")
-
-            if is_expansion_up:
-                score_hot += 5
-                reasons_hot.append("🚀發散/向上突破")
-
-            if is_expansion_down:
-                score_weak += 5
-                reasons_weak.append("💀發散/向下突破")
-
-            if is_uptrend and not is_expansion_up:
-                score_hot += 3
-                reason = "📈多頭趨勢(回歸中軌)" if pullback_up else "📈多頭趨勢"
-                reasons_hot.append(reason)
-
-            if is_downtrend and not is_expansion_down:
-                score_weak += 3
-                reason = "📉空頭趨勢(回歸中軌)" if pullback_down else "📉空頭趨勢"
-                reasons_weak.append(reason)
-
-            if v_volume > (vol_ma * 1.5):
-                if score_hot > 0: score_hot += 1; reasons_hot.append("🔥🔥放量")
-                if score_weak > 0: score_weak += 1; reasons_weak.append("🔥🔥放量")
-
-            final_type = 'HOT' if score_hot >= score_weak else 'WEAK'
-            score = score_hot if final_type == 'HOT' else score_weak
-            reasons = reasons_hot if final_type == 'HOT' else reasons_weak
-            
-            tier = "Tier 0 (極強)" if score >= 5 else ("Tier 1 (強)" if score >= 3 else "Tier 2 (觀察)")
-            
-            # 獲取 RSI 資訊
-            current_rsi = float(latest_row[f'RSI_{rsi_period}']) if f'RSI_{rsi_period}' in latest_row else 50
-            rsi_status = "📈 買氣增強" if current_rsi > 50 else "📉 買氣偏弱"
-            rsi_delta = current_rsi - 50
-            
-            col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-            
-            with col_s1:
-                st.metric("評級等級", tier)
-            with col_s2:
-                status_color = "green" if final_type == 'HOT' else "red"
-                st.markdown(f"**方向:** :{status_color}[{final_type}]")
-                st.markdown(f"**綜合評分:** {score}")
-            with col_s3:
-                st.metric(f"RSI ({selected_interval_label})", f"{current_rsi:.1f}", f"{rsi_delta:+.1f}")
-                st.markdown(f"**狀態:** {rsi_status}")
-            with col_s4:
-                st.markdown("**觸發特徵:**")
-                for r in reasons:
-                    st.markdown(f"- {r}")
-            
-            if not reasons:
-                st.info("目前無明顯布林帶特徵觸發。")
-                    
-            # --- 策略參考區間 ---
-            st.markdown("#### 🎯 策略參考區間")
-            col_strat1, col_strat2 = st.columns(2)
-            
-            with col_strat1:
-                st.info(f"**📈 布林中軌 (MA20)**: {ma20:.2f}\n\n**帶寬排位**: {bb_width_rank:.1%}")
-                st.info(f"**🚀 上軌 (壓力)**: {bb_upper:.2f}\n\n**💀 下軌 (支撐)**: {bb_lower:.2f}")
-                
-            with col_strat2:
-                st.info("**⚡ 短線策略 (MA Trend)**")
-                if is_uptrend:
-                    ma5 = float(latest_row['SMA_5'])
-                    ma10 = float(latest_row['SMA_10'])
-                    st.success("✅ **符合進場條件 (多頭趨勢)**")
-                    st.markdown(f"- **建議佈局**: `{min(ma5, ma10):.2f}` ~ `{max(ma5, ma10):.2f}`")
-                    st.markdown(f"- **防守停損**: `{ma10 * 0.98:.2f}` (10日線 -2%)")
-                else:
-                    st.warning("⚠️ **目前未符合短線多頭條件**")
-                    st.markdown("- **建議佈局**: 暫無建議")
-                    st.markdown("- **防守停損**: 暫無建議")
-                st.caption("短線策略僅在「多頭趨勢」特徵觸發時建議進場。")
-
-        except Exception as e:
-            st.info(f"資料不足以計算 BB 策略建議，請確認所選日期範圍大於 20 天。 (錯誤: {e})")
-            
-        st.divider()
-
-        # --- 顯示主要圖表 ---
-        st.subheader(f"{ticker} 股價與技術指標")
-        
-        df_chart = df.copy()
-        
-        tab1, tab2, tab3 = st.tabs(["📊 綜合分析", "🕯️ 純 K 線圖", "📈 數據與回測"])
-        
-        with tab1:
-            fig = make_subplots(rows=4, cols=1, shared_xaxes=True, 
-                               vertical_spacing=0.05, 
-                               row_heights=[0.4, 0.2, 0.2, 0.2],
-                               subplot_titles=(f'K線圖與均線 ({selected_interval_label})', '成交量 (Volume)', 'RSI', 'MACD'))
-
-            fig.add_trace(go.Candlestick(x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], 
-                                        low=df_chart['Low'], close=df_chart['Close'], name='K線'), row=1, col=1)
-            
-            ma_colors = {5: 'orange', 10: 'blue', 20: 'green', 60: 'red', 120: 'purple'}
-            for ma, color in ma_colors.items():
-                if f'SMA_{ma}' in df_chart.columns:
-                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'SMA_{ma}'], name=f'SMA {ma}', line=dict(color=color, width=1)), row=1, col=1)
-
-            # Bollinger Bands
-            if 'bb_upper' in df_chart.columns and 'bb_lower' in df_chart.columns:
-                fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['bb_upper'], name='BB Upper', line=dict(color='gray', width=1, dash='dash')), row=1, col=1)
-                fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['bb_lower'], name='BB Lower', line=dict(color='gray', width=1, dash='dash'), fill='tonexty', fillcolor='rgba(128, 128, 128, 0.1)'), row=1, col=1)
-
-            buy_signals = df_chart[df_chart['Position'] == 1]
-            sell_signals = df_chart[df_chart['Position'] == -1]
-            
-            fig.add_trace(go.Scatter(x=buy_signals.index, y=buy_signals['Low'] * 0.98, mode='markers', 
-                                    marker=dict(symbol='triangle-up', size=10, color='green'), name='買入訊號'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=sell_signals.index, y=sell_signals['High'] * 1.02, mode='markers', 
-                                    marker=dict(symbol='triangle-down', size=10, color='red'), name='賣出訊號'), row=1, col=1)
-
-            _close = df_chart['Close'].iloc[:, 0] if isinstance(df_chart['Close'], pd.DataFrame) else df_chart['Close']
-            _open = df_chart['Open'].iloc[:, 0] if isinstance(df_chart['Open'], pd.DataFrame) else df_chart['Open']
-            _volume = df_chart['Volume'].iloc[:, 0] if isinstance(df_chart['Volume'], pd.DataFrame) else df_chart['Volume']
-            
-            vol_colors = ['#ef5350' if c >= o else '#26a69a' for c, o in zip(_close, _open)]
-            fig.add_trace(go.Bar(x=df_chart.index, y=_volume, name='成交量', marker_color=vol_colors), row=2, col=1)
-
-            if f'RSI_{rsi_period}' in df_chart.columns:
-                fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'RSI_{rsi_period}'], name='RSI', line=dict(color='purple')), row=3, col=1)
-            fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
-            fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
-
-            if f'MACDh_12_26_9' in df_chart.columns:
-                fig.add_trace(go.Bar(x=df_chart.index, y=df_chart[f'MACDh_{12}_{26}_{9}'], name='Histogram'), row=4, col=1)
-                fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'MACD_{12}_{26}_{9}'], name='MACD'), row=4, col=1)
-                fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'MACDs_{12}_{26}_{9}'], name='Signal'), row=4, col=1)
-
-            fig.update_layout(height=1000, xaxis_rangeslider_visible=False, showlegend=True)
-            if selected_interval in ['1d', '2d', '3d']:
-                fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-            st.plotly_chart(fig, use_container_width=True)
-
-        with tab2:
-            st.markdown(f"### 專屬 K 線圖 ({selected_interval_label})")
-            fig_k = go.Figure(data=[go.Candlestick(x=df_chart.index,
-                            open=df_chart['Open'],
-                            high=df_chart['High'],
-                            low=df_chart['Low'],
-                            close=df_chart['Close'],
-                            name='K線')])
-            
-            for ma, color in ma_colors.items():
-                if f'SMA_{ma}' in df_chart.columns:
-                    fig_k.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'SMA_{ma}'], name=f'SMA {ma}', line=dict(color=color, width=1)))
-            
-            # Bollinger Bands
-            if 'bb_upper' in df_chart.columns and 'bb_lower' in df_chart.columns:
-                fig_k.add_trace(go.Scatter(x=df_chart.index, y=df_chart['bb_upper'], name='BB Upper', line=dict(color='gray', width=1, dash='dash')))
-                fig_k.add_trace(go.Scatter(x=df_chart.index, y=df_chart['bb_lower'], name='BB Lower', line=dict(color='gray', width=1, dash='dash'), fill='tonexty', fillcolor='rgba(128, 128, 128, 0.1)'))
-            
-            fig_k.update_layout(height=600, xaxis_rangeslider_visible=False, showlegend=True)
-            if selected_interval in ['1d', '2d', '3d']:
-                fig_k.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-            st.plotly_chart(fig_k, use_container_width=True)
-
-        with tab3:
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("最近數據")
-                st.write(df.tail(10))
-                
-            with col2:
-                st.subheader("簡易策略回測結果")
-                df['Daily_Return'] = df['Close'].pct_change()
-                df['Strategy_Return'] = df['Daily_Return'] * df['Signal'].shift(1)
-                
-                cumulative_market = (1 + df['Daily_Return']).cumprod() - 1
-                cumulative_strategy = (1 + df['Strategy_Return']).cumprod() - 1
-                
-                st.metric("市場累積報酬率", f"{cumulative_market.iloc[-1]*100:.2f}%")
-                st.metric("策略累積報酬率", f"{cumulative_strategy.iloc[-1]*100:.2f}%")
-                
-                st.line_chart(pd.DataFrame({
-                    'Market': cumulative_market,
-                    'Strategy': cumulative_strategy
-                }))
 
 except Exception as e:
     st.error(f"發生錯誤: {e}")
