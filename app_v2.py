@@ -17,17 +17,18 @@ st.markdown("""
 <style>
     /* 全體背景與文字 */
     .stApp {
-        background-color: #0e1117;
-        color: #d1d4dc;
+        background-color: #f8f9fa;
+        color: #212529;
     }
     
     /* 頂部標頭樣式 */
     .header-box {
-        background-color: #1e222d;
+        background-color: #ffffff;
         padding: 20px;
         border-radius: 10px;
-        border: 1px solid #2b2b43;
+        border: 1px solid #dee2e6;
         margin-bottom: 20px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
     .price-box {
         background-color: #ef5350;
@@ -35,7 +36,7 @@ st.markdown("""
         padding: 15px;
         border-radius: 8px;
         text-align: center;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     .price-val {
         font-size: 3rem;
@@ -49,18 +50,19 @@ st.markdown("""
     
     /* 區塊卡片樣式 */
     .plan-card {
-        background-color: #1e222d;
+        background-color: #ffffff;
         padding: 15px;
         border-radius: 8px;
-        border: 1px solid #2b2b43;
+        border: 1px solid #dee2e6;
         height: 100%;
         margin-bottom: 15px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
     .plan-title {
-        color: #42a5f5;
+        color: #1976d2;
         font-size: 1.3rem;
         font-weight: bold;
-        border-bottom: 1px solid #2b2b43;
+        border-bottom: 1px solid #e0e0e0;
         padding-bottom: 8px;
         margin-bottom: 12px;
         display: flex;
@@ -74,8 +76,8 @@ st.markdown("""
     
     /* 側邊欄優化 */
     section[data-testid="stSidebar"] {
-        background-color: #131722;
-        border-right: 1px solid #2b2b43;
+        background-color: #ffffff;
+        border-right: 1px solid #dee2e6;
     }
     
     /* 隱藏預設元件 */
@@ -103,7 +105,7 @@ with st.expander("🇺🇸 美股市場熱力圖 (S&P 500)", expanded=False):
           "blockColor": "change",
           "locale": "zh_TW",
           "symbolUrl": "",
-          "colorTheme": "dark",
+          "colorTheme": "light",
           "hasTopBar": false,
           "isDataSetEnabled": false,
           "isZoomEnabled": true,
@@ -128,7 +130,7 @@ with st.expander("🇹🇼 台股市場熱力圖 (Taiwan)", expanded=False):
           "blockColor": "change",
           "locale": "zh_TW",
           "symbolUrl": "",
-          "colorTheme": "dark",
+          "colorTheme": "light",
           "hasTopBar": true,
           "isDataSetEnabled": false,
           "isZoomEnabled": true,
@@ -151,7 +153,7 @@ with st.expander("₿ 虛擬貨幣熱力圖 (Crypto)", expanded=False):
           "blockColor": "change",
           "locale": "zh_TW",
           "symbolUrl": "",
-          "colorTheme": "dark",
+          "colorTheme": "light",
           "hasTopBar": false,
           "isDataSetEnabled": false,
           "isZoomEnabled": true,
@@ -384,12 +386,12 @@ def render_lightweight_chart(df, height=600):
         # 2. 構建 HTML (使用指定版本 v4.1.1)
         html_content = f"""
         <style>
-            html, body {{ margin: 0; padding: 0; width: 100%; height: 100%; background: #131722; overflow: hidden; }}
+            html, body {{ margin: 0; padding: 0; width: 100%; height: 100%; background: #ffffff; overflow: hidden; }}
             #chart-container {{ width: 100%; height: {height}px; }}
             #legend {{
                 position: absolute; left: 12px; top: 12px; z-index: 100;
-                font-family: sans-serif; font-size: 12px; color: #d1d4dc;
-                background: rgba(19, 23, 34, 0.7); padding: 6px; border-radius: 4px; pointer-events: none;
+                font-family: sans-serif; font-size: 12px; color: #212529;
+                background: rgba(255, 255, 255, 0.8); padding: 6px; border-radius: 4px; pointer-events: none;
             }}
             .l-val {{ color: #2962ff; font-weight: bold; margin-right: 6px; }}
         </style>
@@ -412,10 +414,10 @@ def render_lightweight_chart(df, height=600):
                 
                 try {{
                     const chart = LightweightCharts.createChart(container, {{
-                        layout: {{ background: {{ type: 'solid', color: '#131722' }}, textColor: '#d1d4dc' }},
-                        grid: {{ vertLines: {{ color: '#242733' }}, horzLines: {{ color: '#242733' }} }},
-                        rightPriceScale: {{ borderColor: '#2b2b43' }},
-                        timeScale: {{ borderColor: '#2b2b43', timeVisible: true }},
+                        layout: {{ background: {{ type: 'solid', color: '#ffffff' }}, textColor: '#212529' }},
+                        grid: {{ vertLines: {{ color: '#f0f0f0' }}, horzLines: {{ color: '#f0f0f0' }} }},
+                        rightPriceScale: {{ borderColor: '#dee2e6' }},
+                        timeScale: {{ borderColor: '#dee2e6', timeVisible: true }},
                         crosshair: {{ mode: 0 }}
                     }});
 
@@ -955,8 +957,8 @@ try:
         <div class="header-box">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <h1 style="margin:0; color:white;">{info.get('shortName', ticker)} <span style="font-size:1.5rem; color:#888;">交易計畫</span></h1>
-                    <div style="background:#2b2b43; padding:4px 10px; border-radius:4px; display:inline-block; margin-top:8px;">市 {ticker.split('.')[0]}</div>
+                    <h1 style="margin:0; color:#212529;">{info.get('shortName', ticker)} <span style="font-size:1.5rem; color:#888;">交易計畫</span></h1>
+                    <div style="background:#dee2e6; padding:4px 10px; border-radius:4px; display:inline-block; margin-top:8px;">市 {ticker.split('.')[0]}</div>
                 </div>
                 <div class="price-box" style="background-color: {'#ef5350' if price_change >= 0 else '#26a69a'}; min-width: 200px;">
                     <div style="font-size:0.9rem; opacity:0.8;">目前股價</div>
@@ -999,12 +1001,12 @@ try:
                     <div style="font-size:0.8rem; color:#888; margin-bottom:4px;">({levels.get('res2_desc')})</div>
                     <div style="display:flex; justify-content:space-between;"><span>壓力 1</span><span style="color:#ef5350; font-weight:bold;">{levels.get('res1')}</span></div>
                     <div style="font-size:0.8rem; color:#888; margin-bottom:4px;">({levels.get('res1_desc')})</div>
-                    <div style="display:flex; justify-content:space-between; background:#2b2b43; padding:5px; border-radius:4px;"><span>現價</span><span style="font-weight:bold;">{latest_close:.2f}</span></div>
+                    <div style="display:flex; justify-content:space-between; background:#dee2e6; padding:5px; border-radius:4px;"><span>現價</span><span style="font-weight:bold;">{latest_close:.2f}</span></div>
                     <div style="display:flex; justify-content:space-between; margin-top:5px;"><span>支撐 1</span><span style="color:#26a69a; font-weight:bold;">{levels.get('sup1')}</span></div>
                     <div style="font-size:0.8rem; color:#888; margin-bottom:4px;">({levels.get('sup1_desc')})</div>
                     <div style="display:flex; justify-content:space-between;"><span>支撐 2</span><span style="color:#26a69a; font-weight:bold;">{levels.get('sup2')}</span></div>
                     <div style="font-size:0.8rem; color:#888; margin-bottom:4px;">({levels.get('sup2_desc')})</div>
-                    <div style="display:flex; justify-content:space-between; border-top:1px solid #2b2b43; pt:5px;"><span>多頭防守線</span><span style="color:#ffb300;">{levels.get('sup1')}</span></div>
+                    <div style="display:flex; justify-content:space-between; border-top:1px solid #dee2e6; pt:5px;"><span>多頭防守線</span><span style="color:#ffb300;">{levels.get('sup1')}</span></div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -1022,7 +1024,7 @@ try:
                 fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
                 
                 # 均線色彩依圖片調整
-                colors = {'MA5': 'gold', 'MA10': 'cyan', 'MA20': 'magenta', 'MA60': 'lime', 'MA120': 'white'}
+                colors = {'MA5': 'orange', 'MA10': 'blue', 'MA20': 'purple', 'MA60': 'green', 'MA120': 'black'}
                 for ma in colors:
                     if ma in df.columns:
                         fig.add_trace(go.Scatter(x=df.index, y=df[ma], name=ma, line=dict(color=colors[ma], width=1)), row=1, col=1)
@@ -1038,7 +1040,7 @@ try:
                 
                 fig.update_layout(height=550, margin=dict(l=10, r=10, t=10, b=10), showlegend=True, 
                                   legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                                  xaxis_rangeslider_visible=False, template="plotly_dark",
+                                  xaxis_rangeslider_visible=False, template="plotly_white",
                                   paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -1066,7 +1068,7 @@ try:
                         • 停損：跌破 {levels.get('sup2')}
                     </div>
                 </div>
-                <div style="border-top: 1px solid #2b2b43; padding-top:15px; margin-bottom:15px;">
+                <div style="border-top: 1px solid #dee2e6; padding-top:15px; margin-bottom:15px;">
                     <div style="color:#42a5f5; font-weight:bold; margin-bottom:5px;">突破進場</div>
                     <div style="font-size:0.85rem; line-height:1.6;">
                         • 條件：放量突破壓力1 ({levels.get('res1')})<br>
@@ -1075,7 +1077,7 @@ try:
                         • 停損：跌破 {latest_close:.2f}
                     </div>
                 </div>
-                <div style="border-top: 1px solid #2b2b43; padding-top:15px;">
+                <div style="border-top: 1px solid #dee2e6; padding-top:15px;">
                     <div style="color:#26a69a; font-weight:bold; margin-bottom:5px;">空頭避險</div>
                     <div style="font-size:0.85rem; line-height:1.6;">
                         • 條件：跌破強力支撐 {levels.get('sup2')}<br>
