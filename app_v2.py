@@ -825,7 +825,7 @@ def calculate_indicators(df_in, ema_periods, rsi_period):
     
     # BB Width Rank
     widths = df_res['bb_width']
-    df_res['bb_width_rank'] = widths.rolling(window=1080, min_periods=50).apply(lambda x: (x <= x[-1]).mean() if len(x) > 0 else 0.5)
+    df_res['bb_width_rank'] = widths.rolling(window=1080, min_periods=50).apply(lambda x: (x <= x[-1]).mean() if len(x) > 0 else 0.5, raw=True)
 
     # RSI
     delta = close_series.diff()
@@ -1228,6 +1228,9 @@ try:
                         st.plotly_chart(fig_pie, use_container_width=True)
 
 except Exception as e:
+    import traceback
+    with open('/tmp/streamlit_traceback.log', 'w') as f:
+        f.write(traceback.format_exc())
     st.error(f"發生錯誤: {e}")
 
 st.sidebar.markdown("---")
