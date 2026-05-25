@@ -366,11 +366,18 @@ def render_lightweight_chart(df, height=600):
             })
         # 均線與指標
         indicators_data = {}
-        for col in ['EMA_8', 'EMA_13', 'EMA_21', 'EMA_55', 'EMA_100', 'EMA_200', 'bb_upper', 'bb_lower']:
+        for col in ['ST_Upper', 'ST_Lower']:
             if col in chart_df.columns:
-                target_df = chart_df[['time', col]].dropna()
-                if not target_df.empty:
-                    indicators_data[col] = target_df.rename(columns={col: 'value'}).to_dict(orient='records')
+                records = []
+                for _, row in chart_df[['time', col]].iterrows():
+                    val = row[col]
+                    if pd.isna(val):
+                        # Whitespace data item creates a gap in the line
+                        records.append({'time': int(row['time'])})
+                    else:
+                        records.append({'time': int(row['time']), 'value': float(val)})
+                if records:
+                    indicators_data[col] = records
 
 
         markers = []
@@ -439,17 +446,16 @@ def render_lightweight_chart(df, height=600):
                     volSeries.setData({json.dumps(volume_records)});
 
                     const indData = {js_ind};
-                    const colors = {{ 'EMA_8': 'orange', 'EMA_13': 'skyblue', 'EMA_21': 'lime', 'EMA_55': 'green', 'EMA_100': 'red', 'EMA_200': 'purple', 'bb_upper': 'rgba(128,128,128,0.4)', 'bb_lower': 'rgba(128,128,128,0.4)' }};
+                    const colors = {{ 'ST_Upper': 'red', 'ST_Lower': 'green' }};
 
-                    
+
                     Object.keys(indData).forEach(key => {{
                         const series = chart.addLineSeries({{
                             color: colors[key] || '#ccc',
-                            lineWidth: key.includes('bb') ? 1 : 1,
-                            lineStyle: key.includes('bb') ? 2 : 0,
+                            lineWidth: 2,
+                            lineStyle: 0,
                             title: key
-                        }});
-                        series.setData(indData[key]);
+                        }});                        series.setData(indData[key]);
                     }});
 
                     chart.subscribeCrosshairMove(param => {{
@@ -694,105 +700,93 @@ def calc_return(df, days):
     return 0.0
 
 def find_key_levels(df):
-    """識別支撐與壓力位，標準：(均線與高點重合) 或 (均線與低點重合)"""
-    if df.empty or len(df) < 120: # 增加到 120 以便計算 MA120
+    """識別支撐與壓力位，基於 SuperTrend 與波段高低點"""
+    if df.empty or len(df) < 20:
         return {}
     
     latest = df.iloc[-1]
     current_price = float(latest['Close'].iloc[0]) if isinstance(latest['Close'], pd.Series) else float(latest['Close'])
     
-    ma_values = {
-        'MA5': float(latest['MA5']),
-        'MA10': float(latest['MA10']),
-        'MA20': float(latest['MA20']),
-        'MA60': float(latest['MA60']),
-        'MA120': float(latest['MA120'])
-    }
-    
-    # 尋找最近 120 根 K 線的局部高低點
-    recent_df = df.tail(120)
+    # 尋找最近 60 根 K 線的局部高低點
+    recent_df = df.tail(60)
     local_highs = recent_df['High'].rolling(window=10, center=True).max().dropna().unique()
     local_lows = recent_df['Low'].rolling(window=10, center=True).min().dropna().unique()
     
-    key_resistances = []
-    key_supports = []
-    
-    tolerance = 0.018 # 1.8% 的重合容許誤差
-    
-    for ma_name, ma_val in ma_values.items():
-        # 檢查與高點重合 (壓力)
-        for h in local_highs:
-            if abs(ma_val - h) / h < tolerance:
-                key_resistances.append({'val': round((ma_val + h) / 2, 2), 'desc': f"{ma_name} + 高點重合"})
-        
-        # 檢查與低點重合 (支撐)
-        for l in local_lows:
-            if abs(ma_val - l) / l < tolerance:
-                key_supports.append({'val': round((ma_val + l) / 2, 2), 'desc': f"{ma_name} + 低點重合"})
+    valid_res = sorted([h for h in local_highs if h > current_price])
+    valid_sup = sorted([l for l in local_lows if l < current_price], reverse=True)
 
-    # 確保壓力在現價之上，支撐在現價之下，並依距離排序
-    valid_res = sorted([r for r in key_resistances if r['val'] > current_price], key=lambda x: x['val'])
-    valid_sup = sorted([s for s in key_supports if s['val'] < current_price], key=lambda x: x['val'], reverse=True)
+    st_upper = float(latest['ST_Upper'])
+    st_lower = float(latest['ST_Lower'])
+    st_trend = latest['SuperTrend']
     
-    # 備用邏輯：若無重合點
-    if not valid_res:
-        valid_res = [{'val': round(ma_values['MA20'], 2), 'desc': 'MA20 壓力'}]
-        if ma_values['MA60'] > current_price:
-            valid_res.append({'val': round(ma_values['MA60'], 2), 'desc': 'MA60 壓力'})
-        valid_res.append({'val': round(max(local_highs), 2), 'desc': '波段高點壓力'})
-        valid_res = sorted([r for r in valid_res if r['val'] > current_price], key=lambda x: x['val'])
-
-    if not valid_sup:
-        valid_sup = [{'val': round(ma_values['MA20'], 2), 'desc': 'MA20 支撐'}]
-        if ma_values['MA60'] < current_price:
-            valid_sup.append({'val': round(ma_values['MA60'], 2), 'desc': 'MA60 支撐'})
-        valid_sup.append({'val': round(min(local_lows), 2), 'desc': '波段低點支撐'})
-        valid_sup = sorted([s for s in valid_sup if s['val'] < current_price], key=lambda x: x['val'], reverse=True)
-
-    res1 = valid_res[0] if valid_res else {'val': round(current_price * 1.05, 2), 'desc': '預估壓力1'}
-    res2 = valid_res[1] if len(valid_res) > 1 else {'val': round(res1['val'] * 1.05, 2), 'desc': '預估壓力2'}
-    
-    # 支撐 1 邏輯
-    sup1 = valid_sup[0] if valid_sup else {'val': round(current_price * 0.95, 2), 'desc': '預估支撐1'}
-    
-    # 支撐 2 邏輯：檢查支撐 1 與支撐 2 距離
-    dist_threshold = 0.03 # 距離小於 3% 視為太近
-    
-    potential_sup2 = None
-    if len(valid_sup) > 1:
-        s2 = valid_sup[1]
-        if (sup1['val'] - s2['val']) / sup1['val'] < dist_threshold:
-            # 太近了，嘗試尋找更遠的點 (特別是包含 MA120 的)
-            for s in valid_sup[2:]:
-                if (sup1['val'] - s['val']) / sup1['val'] >= dist_threshold:
-                    potential_sup2 = s
-                    break
-        else:
-            potential_sup2 = s2
-
-    # 如果還是沒找到合適的支撐 2，或者原本就沒有足夠的 valid_sup，則採用 MA120 相關邏輯
-    if potential_sup2 is None:
-        ma120_val = ma_values['MA120']
-        # 尋找靠近 MA120 的波段低點
-        coincident_l = [l for l in local_lows if abs(ma120_val - l) / l < 0.05]
-        if coincident_l:
-            target_val = round((ma120_val + min(coincident_l)) / 2, 2)
-            potential_sup2 = {'val': target_val, 'desc': 'MA120 + 波段低點 (遠端)'}
-        else:
-            potential_sup2 = {'val': round(ma120_val, 2), 'desc': 'MA120 強力支撐'}
-            
-    # 最後檢查：如果 MA120 支撐還是跟支撐 1 太近 (例如股價剛好在均線糾結處)，則強行下調
-    if (sup1['val'] - potential_sup2['val']) / sup1['val'] < dist_threshold:
-        potential_sup2 = {'val': round(sup1['val'] * 0.93, 2), 'desc': '深層波段支撐 (預估)'}
+    if st_trend == 1.0:
+        sup1 = {'val': round(st_lower, 2), 'desc': 'SuperTrend 支撐線'}
+        res1 = {'val': round(valid_res[0], 2) if valid_res else round(current_price * 1.05, 2), 'desc': '波段高點壓力'}
+        res2 = {'val': round(valid_res[1], 2) if len(valid_res) > 1 else round(res1['val'] * 1.05, 2), 'desc': '次高點壓力'}
+        sup2 = {'val': round(valid_sup[0], 2) if valid_sup and valid_sup[0] < st_lower else round(st_lower * 0.95, 2), 'desc': '波段低點支撐'}
+    else:
+        res1 = {'val': round(st_upper, 2), 'desc': 'SuperTrend 壓力線'}
+        sup1 = {'val': round(valid_sup[0], 2) if valid_sup else round(current_price * 0.95, 2), 'desc': '波段低點支撐'}
+        sup2 = {'val': round(valid_sup[1], 2) if len(valid_sup) > 1 else round(sup1['val'] * 0.95, 2), 'desc': '次低點支撐'}
+        res2 = {'val': round(valid_res[0], 2) if valid_res and valid_res[0] > st_upper else round(st_upper * 1.05, 2), 'desc': '波段高點壓力'}
 
     return {
         'res1': res1['val'], 'res1_desc': res1['desc'],
         'res2': res2['val'], 'res2_desc': res2['desc'],
         'sup1': sup1['val'], 'sup1_desc': sup1['desc'],
-        'sup2': potential_sup2['val'], 'sup2_desc': potential_sup2['desc']
+        'sup2': sup2['val'], 'sup2_desc': sup2['desc']
     }
 
-def calculate_indicators(df_in, ema_periods, rsi_period):
+def calc_supertrend(high, low, close, period=10, multiplier=2.0):
+    high = np.array(high)
+    low = np.array(low)
+    close = np.array(close)
+    
+    tr1 = high - low
+    tr2 = np.abs(high - np.roll(close, 1))
+    tr3 = np.abs(low - np.roll(close, 1))
+    tr = np.maximum(tr1, np.maximum(tr2, tr3))
+    tr[0] = tr1[0]
+    
+    atr = np.zeros_like(tr)
+    atr[0] = tr[0]
+    alpha = 1.0 / period
+    for i in range(1, len(tr)):
+        atr[i] = alpha * tr[i] + (1 - alpha) * atr[i-1]
+        
+    hl2 = (high + low) / 2
+    basic_ub = hl2 + (multiplier * atr)
+    basic_lb = hl2 - (multiplier * atr)
+    
+    final_ub = np.zeros_like(basic_ub)
+    final_lb = np.zeros_like(basic_lb)
+    supertrend = np.zeros_like(close)
+    
+    final_ub[0] = basic_ub[0]
+    final_lb[0] = basic_lb[0]
+    supertrend[0] = 1.0
+    
+    for i in range(1, len(close)):
+        if basic_ub[i] < final_ub[i-1] or close[i-1] > final_ub[i-1]:
+            final_ub[i] = basic_ub[i]
+        else:
+            final_ub[i] = final_ub[i-1]
+            
+        if basic_lb[i] > final_lb[i-1] or close[i-1] < final_lb[i-1]:
+            final_lb[i] = basic_lb[i]
+        else:
+            final_lb[i] = final_lb[i-1]
+
+        if supertrend[i-1] == -1.0 and close[i] > final_ub[i-1]:
+            supertrend[i] = 1.0
+        elif supertrend[i-1] == 1.0 and close[i] < final_lb[i-1]:
+            supertrend[i] = -1.0
+        else:
+            supertrend[i] = supertrend[i-1]
+            
+    return supertrend, final_ub, final_lb
+
+def calculate_indicators(df_in, rsi_period):
     if df_in.empty:
         return df_in
         
@@ -801,34 +795,10 @@ def calculate_indicators(df_in, ema_periods, rsi_period):
     # 確保 Close 是 Series
     close_series = df_res['Close'].iloc[:, 0] if isinstance(df_res['Close'], pd.DataFrame) else df_res['Close']
     
-    # 均線: 採用台股常用的 5, 10, 20, 60, 120
-    df_res['MA5'] = close_series.rolling(window=5).mean()
-    df_res['MA10'] = close_series.rolling(window=10).mean()
-    df_res['MA20'] = close_series.rolling(window=20).mean()
-    df_res['MA60'] = close_series.rolling(window=60).mean()
-    df_res['MA120'] = close_series.rolling(window=120).mean()
-    
-    # EMA & Bias (保留原本的 EMA 用於乖離分析)
-    for ma in ema_periods:
-        df_res[f'EMA_{ma}'] = close_series.ewm(span=ma, adjust=False).mean()
-        df_res[f'Bias_{ma}'] = (close_series - df_res[f'EMA_{ma}']) / df_res[f'EMA_{ma}'] * 100
-        
-    # Bollinger Bands (20, 2)
-    df_res['ma20'] = close_series.rolling(window=20).mean()
-    df_res['std20'] = close_series.rolling(window=20).std()
-    df_res['bb_upper'] = df_res['ma20'] + (2 * df_res['std20'])
-    df_res['bb_lower'] = df_res['ma20'] - (2 * df_res['std20'])
-    df_res['bb_width'] = (df_res['bb_upper'] - df_res['bb_lower']) / df_res['ma20']
-    df_res['ma20_slope'] = df_res['ma20'].diff()
-    
     # Volume MA
     volume_series = df_res['Volume'].iloc[:, 0] if isinstance(df_res['Volume'], pd.DataFrame) else df_res['Volume']
     df_res['vol_ma'] = volume_series.rolling(window=20).mean()
     
-    # BB Width Rank
-    widths = df_res['bb_width']
-    df_res['bb_width_rank'] = widths.rolling(window=1080, min_periods=50).apply(lambda x: (x <= x[-1]).mean() if len(x) > 0 else 0.5, raw=True)
-
     # RSI
     delta = close_series.diff()
     gain = (delta.where(delta > 0, 0))
@@ -845,9 +815,17 @@ def calculate_indicators(df_in, ema_periods, rsi_period):
     df_res['MACDs_12_26_9'] = df_res['MACD_12_26_9'].ewm(span=9, adjust=False).mean()
     df_res['MACDh_12_26_9'] = df_res['MACD_12_26_9'] - df_res['MACDs_12_26_9']
     
+    # Supertrend
+    high_series = df_res['High'].iloc[:, 0] if isinstance(df_res['High'], pd.DataFrame) else df_res['High']
+    low_series = df_res['Low'].iloc[:, 0] if isinstance(df_res['Low'], pd.DataFrame) else df_res['Low']
+    supertrend, final_ub, final_lb = calc_supertrend(high_series, low_series, close_series, period=10, multiplier=2.0)
+    df_res['SuperTrend'] = supertrend
+    df_res['ST_Upper'] = np.where(supertrend == -1.0, final_ub, np.nan)
+    df_res['ST_Lower'] = np.where(supertrend == 1.0, final_lb, np.nan)
+    
     # Signal
     df_res['Signal'] = 0.0
-    df_res.loc[df_res['MA5'] > df_res['MA20'], 'Signal'] = 1.0
+    df_res.loc[df_res['SuperTrend'] == 1.0, 'Signal'] = 1.0
     df_res['Position'] = df_res['Signal'].diff()
     
     return df_res
@@ -934,14 +912,13 @@ try:
             bm_df = bm_df.dropna(subset=['Close', 'Open', 'High', 'Low'])
 
         # --- 計算指標 ---
-        ema_periods = [8, 13, 21, 55, 100, 200]
-        df = calculate_indicators(df, ema_periods, rsi_period)
+        df = calculate_indicators(df, rsi_period)
         levels = find_key_levels(df)
 
         # --- 獲取數據 ---
         latest_data = df.iloc[-1]
         prev_data = df.iloc[-2] if len(df) > 1 else latest_data
-        
+
         latest_close = float(latest_data['Close'].iloc[0]) if isinstance(latest_data['Close'], pd.Series) else float(latest_data['Close'])
         prev_close = float(prev_data['Close'].iloc[0]) if isinstance(prev_data['Close'], pd.Series) else float(prev_data['Close'])
         price_change = latest_close - prev_close
@@ -949,9 +926,8 @@ try:
         latest_date_str = latest_data.name.strftime('%Y-%m-%d')
 
         # --- 定義趨勢描述 ---
-        trend_dir = "多頭排列" if latest_data['MA5'] > latest_data['MA20'] > latest_data['MA60'] else "回調整理中"
-        ma_msg = "均線多頭排列" if latest_data['MA5'] > latest_data['MA10'] > latest_data['MA20'] else "均線糾結或空頭"
-        
+        trend_dir = "多頭排列 (SuperTrend: 買入)" if latest_data['SuperTrend'] == 1.0 else "空頭排列 (SuperTrend: 賣出)"
+        ma_msg = "SuperTrend 位於多頭區間" if latest_data['SuperTrend'] == 1.0 else "SuperTrend 位於空頭區間"        
         # --- 1. 頁面標題與核心數據 (Header) ---
         st.markdown(f"""
         <div class="header-box">
@@ -1023,8 +999,8 @@ try:
                 # K 線
                 fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
                 
-                # 均線色彩依圖片調整
-                colors = {'MA5': 'orange', 'MA10': 'blue', 'MA20': 'purple', 'MA60': 'green', 'MA120': 'black'}
+                # 指標色彩
+                colors = {'ST_Upper': 'red', 'ST_Lower': 'green'}
                 for ma in colors:
                     if ma in df.columns:
                         fig.add_trace(go.Scatter(x=df.index, y=df[ma], name=ma, line=dict(color=colors[ma], width=1)), row=1, col=1)
