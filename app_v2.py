@@ -997,13 +997,30 @@ try:
         # --- 定義趨勢描述 ---
         trend_dir = "多頭排列 (SuperTrend: 買入)" if latest_data['SuperTrend'] == 1.0 else "空頭排列 (SuperTrend: 賣出)"
         ma_msg = "SuperTrend 位於多頭區間" if latest_data['SuperTrend'] == 1.0 else "SuperTrend 位於空頭區間"        
+        # --- 獲取個股產業資訊 ---
+        display_industry = "未知"
+        if market in ["台股上市 (TWSE)", "台股上櫃 (OTC)"]:
+            try:
+                stock_list_df = pd.read_csv("stock_list.csv")
+                clean_id = ticker.split('.')[0]
+                target_row = stock_list_df[stock_list_df['stock_id'] == clean_id]
+                if not target_row.empty:
+                    display_industry = target_row['industry_category'].iloc[0]
+            except:
+                pass
+        else:
+            display_industry = info.get('sector', info.get('industry', '未知'))
+
         # --- 1. 頁面標題與核心數據 (Header) ---
         st.markdown(f"""
         <div class="header-box">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
                     <h1 style="margin:0; color:#212529;">{info.get('shortName', ticker)} <span style="font-size:1.5rem; color:#888;">交易計畫</span></h1>
-                    <div style="background:#dee2e6; padding:4px 10px; border-radius:4px; display:inline-block; margin-top:8px;">市 {ticker.split('.')[0]}</div>
+                    <div style="display: flex; gap: 10px; margin-top: 8px;">
+                        <div style="background:#dee2e6; padding:4px 10px; border-radius:4px;">代號: {ticker.split('.')[0]}</div>
+                        <div style="background:#e3f2fd; color:#1976d2; padding:4px 10px; border-radius:4px; font-weight:bold;">產業: {display_industry}</div>
+                    </div>
                 </div>
                 <div class="price-box" style="background-color: {'#ef5350' if price_change >= 0 else '#26a69a'}; min-width: 200px;">
                     <div style="font-size:0.9rem; opacity:0.8;">目前股價</div>
