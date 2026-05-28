@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import requests
 import json
+from sector_logic import get_all_sector_momentum, get_sector_top_volume
 
 # 頁面配置
 st.set_page_config(page_title="股票交易計畫儀表板", layout="wide")
@@ -90,6 +91,17 @@ st.title("📈 股票分析策略網頁模板")
 st.markdown("""
 這是一個使用 Streamlit 建立的股票分析模板。您可以輸入股票代碼、選擇日期範圍，並查看技術指標、大盤動量與簡易回測結果。
 """)
+
+# 產業動量置頂佔位符
+industry_momentum_placeholder = st.empty()
+
+@st.cache_data(ttl=3600)
+def cached_all_sector_momentum():
+    return get_all_sector_momentum()
+
+@st.cache_data(ttl=3600)
+def cached_sector_top_volume(sector_name):
+    return get_sector_top_volume(sector_name)
 
 # --- 全球市場熱力圖 ---
 with st.expander("🇺🇸 美股市場熱力圖 (S&P 500)", expanded=False):
@@ -222,6 +234,63 @@ selected_interval_label = st.sidebar.selectbox(
 )
 selected_interval = interval_options[interval_labels.index(selected_interval_label)]
 rsi_period = st.sidebar.number_input("RSI 週期", value=14)
+
+# --- 台股產業動量與熱門股 (置頂顯示) ---
+if market in ["台股上市 (TWSE)", "台股上櫃 (OTC)"]:
+    with industry_momentum_placeholder.container():
+        st.subheader("🏆 台股產業動量與熱門股")
+        with st.spinner("正在計算產業動能..."):
+            sector_df = cached_all_sector_momentum()
+            
+        if not sector_df.empty:
+            # 顯示前十強勢產業的動量資訊
+            st.markdown("#### 🚀 前十強勢產業動量快報")
+            
+            # 只取前十名
+            top_10_df = sector_df.head(10)
+            
+            # 使用每列 5 個的格狀佈局顯示 (兩排共 10 個)
+            cols_per_row = 5
+            for i in range(0, len(top_10_df), cols_per_row):
+                row_sectors = top_10_df.iloc[i : i + cols_per_row]
+                m_cols = st.columns(cols_per_row)
+                for j, (_, row) in enumerate(row_sectors.iterrows()):
+                    # 計算總排名
+                    rank = i + j
+                    with m_cols[j]:
+                        if rank < 5:
+                            # 前五大產業使用紅字與外框標示
+                            st.markdown(f"""
+                                <div style="
+                                    text-align: center; 
+                                    border: 2px solid #ef5350; 
+                                    border-radius: 8px; 
+                                    padding: 10px 5px; 
+                                    background-color: #fff5f5;
+                                    margin-bottom: 10px;
+                                ">
+                                    <div style="color: #ef5350; font-weight: bold; font-size: 0.8rem; margin-bottom: 2px;">🏆 TOP {rank+1}</div>
+                                    <div style="color: #ef5350; font-weight: 1000; font-size: 1.1rem; margin-bottom: 2px;">{row['Sector']}</div>
+                                    <div style="color: #ef5350; font-size: 1.3rem; font-weight: bold;">{row['Momentum']*100:+.2f}%</div>
+                                </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            # 6-10 名使用標準樣式
+                            st.metric(f"#{rank+1} {row['Sector']}", f"{row['Momentum']*100:+.2f}%")
+            
+            # 點進產業後列出成交量前 5 的個股
+            with st.expander("🔍 點擊選擇產業查看熱門個股", expanded=False):
+                selected_sector = st.selectbox("選擇產業", ["請選擇..."] + sector_df['Sector'].tolist())
+                if selected_sector and selected_sector != "請選擇...":
+                    with st.spinner(f"正在抓取 {selected_sector} 熱門股..."):
+                        top_stocks = cached_sector_top_volume(selected_sector)
+                    if not top_stocks.empty:
+                        st.table(top_stocks)
+                    else:
+                        st.warning("無法取得該產業的熱門股資料。")
+        else:
+            st.warning("暫時無法取得產業動能資料。")
+        st.divider()
 
 st.sidebar.divider()
 st.sidebar.subheader("🔑 進階 API 設定")
