@@ -7,45 +7,59 @@ from plotly.subplots import make_subplots
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
-# --- CONFIG & HEADERS ---
+# --- CONFIG & GEO-FAILOVER ---
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
-# --- CORE DATA ENGINE v11 (Debug Enabled) ---
+# Binance mirrored endpoints to try and bypass regional blocks (Status 451)
+API_BASES = [
+    "https://fapi.binance.com",
+    "https://fapi1.binance.com",
+    "https://fapi2.binance.com",
+    "https://fapi3.binance.com"
+]
+
+def smart_request(endpoint):
+    """Try multiple API bases to bypass geo-blocking."""
+    for base in API_BASES:
+        try:
+            url = f"{base}{endpoint}"
+            resp = requests.get(url, headers=HEADERS, timeout=10)
+            if resp.status_code == 200:
+                return resp
+            elif resp.status_code == 451:
+                continue # Try next base
+        except:
+            continue
+    return None
+
+# --- CORE DATA ENGINE v11.5 ---
 
 @st.cache_data(ttl=300)
 def get_indicators_v11(symbol, interval):
     try:
-        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit=100"
-        resp = requests.get(url, headers=HEADERS, timeout=15)
-        if resp.status_code != 200: return None
+        resp = smart_request(f"/fapi/v1/klines?symbol={symbol}&interval={interval}&limit=100")
+        if not resp: return None
         data = resp.json()
         if not isinstance(data, list) or len(data) < 60: return None
         
         df = pd.DataFrame(data, columns=['ot','o','h','l','c','v','ct','qv','count','tbb','tbq','i'])
-        for col in ['o','h','l','c','v','tbb']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+        for col in ['o','h','l','c','v','tbb']: df[col] = pd.to_numeric(df[col], errors='coerce')
         
         ma60 = float(df['c'].iloc[-60:].mean())
         exp12 = df['c'].ewm(span=12, adjust=False).mean()
         exp26 = df['c'].ewm(span=26, adjust=False).mean()
         dif = exp12 - exp26; dea = dif.ewm(span=9, adjust=False).mean(); hist = dif - dea
-        
         tf_ret = float(((df['c'].iloc[-1] - df['c'].iloc[-2]) / df['c'].iloc[-2]) * 100)
         df['delta'] = 2 * df['tbb'] - df['v']
         cvd_recent = float(df['delta'].iloc[-5:].sum())
-        
         h_hist = [float(v) for v in hist.iloc[-5:].fillna(0).tolist()]
         c_list = []
         for r in df.iloc[-5:][['o','h','l','c']].values.tolist():
             c_list.append({'open':r[0], 'high':r[1], 'low':r[2], 'close':r[3]})
         
-        return {
-            'ma60': ma60, 'dif': float(dif.iloc[-1]), 'dea': float(dea.iloc[-1]),
-            'hist': float(hist.iloc[-1]), 'hist_history': h_hist, 'candles': c_list,
-            'cvd': cvd_recent, 'tf_ret': tf_ret
-        }
+        return {'ma60': ma60, 'dif': float(dif.iloc[-1]), 'dea': float(dea.iloc[-1]), 'hist': float(hist.iloc[-1]), 'hist_history': h_hist, 'candles': c_list, 'cvd': cvd_recent, 'tf_ret': tf_ret}
     except: return None
 
 def batch_fetch_indicators_v11(symbols):
@@ -57,29 +71,23 @@ def batch_fetch_indicators_v11(symbols):
         for k, v in intervals.items(): tasks.append((s, k, v))
             
     results = {s: {} for s in sym_list}
-    with ThreadPoolExecutor(max_workers=10) as executor: # Even more conservative for cloud
+    with ThreadPoolExecutor(max_workers=8) as executor: # Super conservative for cloud
         f_to_t = {executor.submit(get_indicators_v11, t[0], t[2]): t for t in tasks}
         for f in f_to_t:
-            t = f_to_t[f]
-            try: results[t[0]][t[1]] = f.result()
-            except: results[t[0]][t[1]] = None
+            t = f_to_t[f]; results[t[0]][t[1]] = f.result()
     return results
 
 def get_top_30_hot_coins():
     try:
-        # Ticker API is heavy, using a slightly more reliable timeout
-        resp = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", headers=HEADERS, timeout=25)
-        if resp.status_code != 200:
-            st.error(f"BINANCE_API_REJECTED: STATUS_{resp.status_code}")
+        resp = smart_request("/fapi/v1/ticker/24hr")
+        if not resp:
+            st.error("SYSTEM_BLOCKADE: Binance blocked this server's region (Status 451). Try deploying in Singapore or Europe.")
             return pd.DataFrame()
-        d = resp.json(); df = pd.DataFrame(d)
-        df['quoteVolume'] = pd.to_numeric(df['quoteVolume'])
-        df['lastPrice'] = pd.to_numeric(df['lastPrice'])
-        df['priceChangePercent'] = pd.to_numeric(df['priceChangePercent'])
+        df = pd.DataFrame(resp.json())
+        df['quoteVolume'] = pd.to_numeric(df['quoteVolume']); df['lastPrice'] = pd.to_numeric(df['lastPrice']); df['priceChangePercent'] = pd.to_numeric(df['priceChangePercent'])
         return df[df['symbol'].str.endswith('USDT')].sort_values(by='quoteVolume', ascending=False).head(30)
     except Exception as e:
-        st.error(f"CONNECTION_FAILURE: {str(e)}")
-        return pd.DataFrame()
+        st.error(f"ENGINE_FAILURE: {str(e)}"); return pd.DataFrame()
 
 def format_volume(vol):
     if vol is None: return "--"
@@ -104,36 +112,29 @@ def draw_svg_kline(candles):
         svg += f'<rect x="{x}%" y="{min(yo,yc)}" width="14%" height="{max(abs(yo-yc),1)}" fill="{col}" />'
     return svg + '</svg>'
 
-@st.cache_data(ttl=60)
-def fetch_detailed_klines(symbol, interval):
-    try:
-        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit=100"
-        d = requests.get(url, headers=HEADERS, timeout=15).json(); df = pd.DataFrame(d, columns=['t','o','h','l','c','v','ct','qv','count','tbb','tbq','i'])
-        df['time'] = pd.to_datetime(df['t'], unit='ms')
-        for col in ['o','h','l','c','v','tbb']: df[col] = pd.to_numeric(df[col])
-        return df
-    except: return pd.DataFrame()
-
 @st.cache_data(ttl=10)
 def fetch_market_sentiment(symbol):
     res = {'funding': None, 'oi': None, 'ls': None}
     try:
-        f = requests.get(f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}", headers=HEADERS, timeout=10).json()
+        f = smart_request(f"/fapi/v1/premiumIndex?symbol={symbol}").json()
         res['funding'] = float(f.get('lastFundingRate', 0)) * 100
     except: pass
     try:
-        o = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}", headers=HEADERS, timeout=10).json()
+        o = smart_request(f"/fapi/v1/openInterest?symbol={symbol}").json()
         res['oi'] = float(o.get('openInterest', 0))
     except: pass
     try:
-        l = requests.get(f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol}&period=5m&limit=1", headers=HEADERS, timeout=10).json()
+        l = smart_request(f"/futures/data/globalLongShortAccountRatio?symbol={symbol}&period=5m&limit=1").json()
         if l: res['ls'] = float(l[0]['longShortRatio'])
     except: pass
     return res
 
 def render_timeframe_chart(symbol, interval, label):
-    df = fetch_detailed_klines(symbol, interval)
-    if df.empty: st.error(f"DATA_LINK_ERROR: {label}"); return
+    resp = smart_request(f"/fapi/v1/klines?symbol={symbol}&interval={interval}&limit=100")
+    if not resp: st.error(f"DATA_LINK_ERROR: {label}"); return
+    df = pd.DataFrame(resp.json(), columns=['t','o','h','l','c','v','ct','qv','count','tbb','tbq','i'])
+    for col in ['o','h','l','c','v','tbb']: df[col] = pd.to_numeric(df[col])
+    df['time'] = pd.to_datetime(df['t'], unit='ms')
     df['MA60'] = df['c'].rolling(window=60).mean()
     exp12, exp26 = df['c'].ewm(span=12, adjust=False).mean(), df['c'].ewm(span=26, adjust=False).mean()
     df['DIF'] = exp12 - exp26; df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean(); df['HIST'] = df['DIF'] - df['DEA']
@@ -179,10 +180,8 @@ def render_detail_view(symbol):
 @st.fragment(run_every=3)
 def render_dashboard_fragment():
     top = get_top_30_hot_coins()
-    if top.empty: 
-        st.info("WAITING_FOR_BINANCE_API_RESPONSE... (Check Sidebar for detailed error logs)")
-        return
-    
+    if top.empty: return # Error already shown in main function
+
     all_res = batch_fetch_indicators_v11(top['symbol'].tolist())
     bh4 = all_res.get('BTCUSDT', {}).get('H4', {}).get('tf_ret', 0) if all_res.get('BTCUSDT') else 0
     bd1 = all_res.get('BTCUSDT', {}).get('D1', {}).get('tf_ret', 0) if all_res.get('BTCUSDT') else 0
@@ -196,7 +195,6 @@ def render_dashboard_fragment():
         if h4_d and d1_d:
             h4r, d1r = h4_d['tf_ret']-bh4, d1_d['tf_ret']-bd1
             vs_btc = f'<span class="vs-btc-badge {"pos" if h4r>=0 else "neg"}">H4_VS_BTC: {h4r:+.2f}%</span><span class="vs-btc-badge {"pos" if d1r>=0 else "neg"}">D1_VS_BTC: {d1r:+.2f}%</span>'
-        
         tfs = []
         for tf in ['H1','H2','H4','H6','H8','H12','D1']:
             d = coin_data.get(tf)
@@ -210,16 +208,15 @@ def render_dashboard_fragment():
                     spk += f'<div class="spark-bar {"pos-bar" if h>=0 else "neg-bar"}" style="left:{5+(idx*19)}%; height:{h_h}%; background:{h_c};"></div>'
                 tfs.append(f'<div class="tf-box"><div class="tf-title">{tf}</div><div class="ind-row"><span class="label">MA60</span><span class="val">{m6:,.1f}</span></div><div class="ind-row"><span class="label">BIAS</span><span class="val {"pos" if bi>=0 else "neg"}">{bi:+.2f}%</span></div><div class="ind-row"><span class="label">CVD</span><span class="val {"pos" if cv>=0 else "neg"}">{format_volume(cv)}</span></div><div class="ind-row"><span class="label">DIF</span><span class="val">{di:,.1f}</span></div><div class="ind-row"><span class="label">DEA</span><span class="val">{de:,.1f}</span></div><div class="ind-row"><span class="label">HIST</span><span class="val {"pos" if d["hist"]>=0 else "neg"}">{d["hist"]:,.1f}</span></div><div class="axis-row"><span class="axis-badge {"bg-pos" if di>=0 else "bg-neg"}">DIF{"↑" if di>=0 else "↓"} {dp:.2f}%</span><span class="axis-badge {"bg-pos" if de>=0 else "bg-neg"}">DEA{"↑" if de>=0 else "↓"} {ep:.2f}%</span></div>{draw_svg_kline(d["candles"])}<div class="spark-container">{spk}</div></div>')
             else: tfs.append(f'<div class="tf-box"><div class="tf-title">{tf}</div><div class="val" style="color:#444; margin-top:30px; font-size:0.7rem;">INITIALIZING...</div></div>')
-        
         with st.container():
             c1, c2 = st.columns([0.85, 0.15])
             with c1: st.markdown(f'<div class="card-header-styled"><img src="https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/{clean.lower()}.png" class="coin-icon" onerror="this.src=\'https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/generic.png\'"><span class="symbol-text">{clean}</span><span class="price-text">${cp:,.4f}</span>{vs_btc}<div style="margin-left:auto; text-align:right;"><div class="change-text {"pos" if row["priceChangePercent"]>=0 else "neg"}">{row["priceChangePercent"]:+.2f}%</div><div class="vol-text">VOL: {row["quoteVolume"]/1e6:.1f}M</div></div></div>', unsafe_allow_html=True)
             with c2: 
-                st.write("")
+                st.write(""); 
                 if st.button("DIVE", key=f"d_{symbol}", use_container_width=True):
                     st.session_state.selected_coins.add(symbol); st.rerun()
             st.markdown(f'<div class="crypto-card-body"><div class="tf-grid">{"".join(tfs)}</div></div><div style="margin-bottom:25px;"></div>', unsafe_allow_html=True)
-    st.markdown(f'<div style="text-align:right; color:#444; margin-bottom:10px; font-family:monospace; font-size:0.8rem;">ENGINE_V11 | HB: {datetime.now().strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="text-align:right; color:#444; margin-bottom:10px; font-family:monospace; font-size:0.8rem;">SYSTEM_HEARTBEAT: {datetime.now().strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
 
 # --- MAIN ---
 
