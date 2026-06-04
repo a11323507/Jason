@@ -7,14 +7,15 @@ from plotly.subplots import make_subplots
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
-# --- CORE DATA ENGINE v8 ---
+# --- CORE DATA ENGINE v10 (Cloud Stable) ---
 
 @st.cache_data(ttl=300)
-def get_indicators_v8(symbol, interval):
-    """Refactored to be 100% free of side-effect expressions."""
+def get_indicators_v10(symbol, interval):
+    """Refactored for absolute cloud stability and zero Magic leakage."""
     try:
         url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit=100"
-        resp = requests.get(url, timeout=5)
+        resp = requests.get(url, timeout=15)
+        if resp.status_code != 200: return None
         data = resp.json()
         if not isinstance(data, list) or len(data) < 60: return None
         
@@ -22,7 +23,7 @@ def get_indicators_v8(symbol, interval):
         for col in ['o','h','l','c','v','tbb']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # MACD & MA60
+        # Calculations
         ma60 = float(df['c'].iloc[-60:].mean())
         exp12 = df['c'].ewm(span=12, adjust=False).mean()
         exp26 = df['c'].ewm(span=26, adjust=False).mean()
@@ -30,21 +31,16 @@ def get_indicators_v8(symbol, interval):
         dea = dif.ewm(span=9, adjust=False).mean()
         hist = dif - dea
         
-        # CVD & Stats
         tf_ret = float(((df['c'].iloc[-1] - df['c'].iloc[-2]) / df['c'].iloc[-2]) * 100)
-        df['delta'] = 2 * df['tbb'] - df['volume'] if 'volume' in df else 2 * df['tbb'] - df['v']
+        df['delta'] = 2 * df['tbb'] - df['v']
         cvd_recent = float(df['delta'].iloc[-5:].sum())
         
-        # Hist history - explicit loop
         h_hist = []
-        for v in hist.iloc[-5:].fillna(0).tolist():
-            h_hist.append(float(v))
+        for v in hist.iloc[-5:].fillna(0).tolist(): h_hist.append(float(v))
             
-        # Candles - explicit construction
         c_list = []
         raw_rows = df.iloc[-5:][['o','h','l','c']].values.tolist()
-        for r in raw_rows:
-            c_list.append({'open':r[0], 'high':r[1], 'low':r[2], 'close':r[3]})
+        for r in raw_rows: c_list.append({'open':r[0], 'high':r[1], 'low':r[2], 'close':r[3]})
         
         return {
             'ma60': ma60, 'dif': float(dif.iloc[-1]), 'dea': float(dea.iloc[-1]),
@@ -53,32 +49,28 @@ def get_indicators_v8(symbol, interval):
         }
     except: return None
 
-def batch_fetch_indicators_v8(symbols):
+def batch_fetch_indicators_v10(symbols):
     intervals = {'H1':'1h','H2':'2h','H4':'4h','H6':'6h','H8':'8h','H12':'12h','D1':'1d'}
     tasks = []
     sym_list = list(symbols)
     if 'BTCUSDT' not in sym_list: sym_list.append('BTCUSDT')
     for s in sym_list:
-        for k, v in intervals.items():
-            tasks.append((s, k, v))
+        for k, v in intervals.items(): tasks.append((s, k, v))
             
-    results = {}
-    for s in sym_list: results[s] = {}
-    
-    with ThreadPoolExecutor(max_workers=40) as executor:
-        f_to_t = {executor.submit(get_indicators_v8, t[0], t[2]): t for t in tasks}
+    results = {s: {} for s in sym_list}
+    # Conservative worker count for Streamlit Cloud stability
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        f_to_t = {executor.submit(get_indicators_v10, t[0], t[2]): t for t in tasks}
         for f in f_to_t:
             t = f_to_t[f]
-            try:
-                r = f.result()
-                results[t[0]][t[1]] = r
-            except:
-                results[t[0]][t[1]] = None
+            try: results[t[0]][t[1]] = f.result()
+            except: results[t[0]][t[1]] = None
     return results
 
 def get_top_30_hot_coins():
     try:
-        resp = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=3)
+        resp = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=20)
+        if resp.status_code != 200: return pd.DataFrame()
         d = resp.json(); df = pd.DataFrame(d)
         df['quoteVolume'] = pd.to_numeric(df['quoteVolume'])
         df['lastPrice'] = pd.to_numeric(df['lastPrice'])
@@ -89,7 +81,7 @@ def get_top_30_hot_coins():
 def format_volume(vol):
     if vol is None: return "--"
     a = abs(vol); s = "-" if vol < 0 else ""
-    if a >= 1e9: return f"{s}{a/1e9:.2f}B"
+    if a >= 1e9: return f"{s}{a/1e9:.1f}B"
     if a >= 1e6: return f"{s}{a/1e6:.1f}M"
     if a >= 1e3: return f"{s}{a/1e3:.0f}K"
     return f"{s}{a:.1f}"
@@ -102,8 +94,7 @@ def draw_svg_kline(candles):
     for c in candles:
         vals.append(c['high'])
         vals.append(c['low'])
-    v_min, v_max = min(vals), max(vals); rng = max(v_max - v_min, 1e-9)
-    h = 35
+    v_min, v_max = min(vals), max(vals); rng = max(v_max - v_min, 1e-9); h = 35
     svg = f'<svg width="100%" height="{h}" style="background:rgba(0,0,0,0.2); border-radius:3px; margin-top:5px; border:1px solid #ffffff05;">'
     for i, c in enumerate(candles):
         x = 5 + (i * 19)
@@ -118,7 +109,7 @@ def draw_svg_kline(candles):
 def fetch_detailed_klines(symbol, interval):
     try:
         url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit=100"
-        d = requests.get(url).json(); df = pd.DataFrame(d, columns=['t','o','h','l','c','v','ct','qv','count','tbb','tbq','i'])
+        d = requests.get(url, timeout=10).json(); df = pd.DataFrame(d, columns=['t','o','h','l','c','v','ct','qv','count','tbb','tbq','i'])
         df['time'] = pd.to_datetime(df['t'], unit='ms')
         for col in ['o','h','l','c','v','tbb']: df[col] = pd.to_numeric(df[col])
         return df
@@ -128,15 +119,15 @@ def fetch_detailed_klines(symbol, interval):
 def fetch_market_sentiment(symbol):
     res = {'funding': None, 'oi': None, 'ls': None}
     try:
-        f = requests.get(f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}", timeout=3).json()
+        f = requests.get(f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}", timeout=5).json()
         res['funding'] = float(f.get('lastFundingRate', 0)) * 100
     except: pass
     try:
-        o = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}", timeout=3).json()
+        o = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}", timeout=5).json()
         res['oi'] = float(o.get('openInterest', 0))
     except: pass
     try:
-        l = requests.get(f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol}&period=5m&limit=1", timeout=3).json()
+        l = requests.get(f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol}&period=5m&limit=1", timeout=5).json()
         if l: res['ls'] = float(l[0]['longShortRatio'])
     except: pass
     return res
@@ -166,7 +157,7 @@ def render_timeframe_chart(symbol, interval, label):
     with c6: st.metric("MA60_BIAS", f"{((df['c'].iloc[-1]-df['MA60'].iloc[-1])/df['MA60'].iloc[-1])*100:+.2f}%")
 
 def render_detail_view(symbol):
-    st.markdown(f'<div style="border: 2px solid #00f2ff; border-radius: 10px; padding: 20px; background: rgba(0,242,255,0.05); margin-bottom: 20px;"><h2 style="font-family:\'Orbitron\'; color:#00f2ff; text-shadow:0 0 10px #00f2ff;">> DEEP_DIVE: {symbol}</h2>', unsafe_allow_html=True)
+    st.markdown(f'<div style="border: 2px solid #00f2ff; border-radius: 10px; padding: 20px; background: rgba(0,242,255,0.05); margin-bottom: 25px;"><h2 style="font-family:\'Orbitron\'; color:#00f2ff; text-shadow:0 0 10px #00f2ff;">> DEEP_DIVE: {symbol}</h2>', unsafe_allow_html=True)
     s = fetch_market_sentiment(symbol)
     if s:
         st.markdown('<div style="background:rgba(0,0,0,0.3); padding:10px 15px; border-radius:8px; margin-bottom:15px; border:1px solid #00f2ff33;"><span style="font-family:\'Orbitron\'; color:#00f2ff; font-size:0.8rem;">[ BINANCE_SENTIMENT_CORE ]</span></div>', unsafe_allow_html=True)
@@ -189,10 +180,10 @@ def render_detail_view(symbol):
 @st.fragment(run_every=3)
 def render_dashboard_fragment():
     top = get_top_30_hot_coins()
-    if top.empty: st.write("CONNECTING_TO_DATASTREAM..."); return
-    all_res = batch_fetch_indicators_v8(top['symbol'].tolist())
-    bh4 = all_res.get('BTCUSDT', {}).get('H4', {}).get('tf_ret', 0)
-    bd1 = all_res.get('BTCUSDT', {}).get('D1', {}).get('tf_ret', 0)
+    if top.empty: st.write("WAITING_FOR_CORE_STREAMS..."); return
+    all_res = batch_fetch_indicators_v10(top['symbol'].tolist())
+    bh4 = all_res.get('BTCUSDT', {}).get('H4', {}).get('tf_ret', 0) if all_res.get('BTCUSDT') else 0
+    bd1 = all_res.get('BTCUSDT', {}).get('D1', {}).get('tf_ret', 0) if all_res.get('BTCUSDT') else 0
     
     for _, row in top.iterrows():
         symbol = row['symbol']; clean = symbol.replace('USDT',''); cp = row['lastPrice']
@@ -221,11 +212,11 @@ def render_dashboard_fragment():
             c1, c2 = st.columns([0.85, 0.15])
             with c1: st.markdown(f'<div class="card-header-styled"><img src="https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/{clean.lower()}.png" class="coin-icon" onerror="this.src=\'https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/generic.png\'"><span class="symbol-text">{clean}</span><span class="price-text">${cp:,.4f}</span>{vs_btc}<div style="margin-left:auto; text-align:right;"><div class="change-text {"pos" if row["priceChangePercent"]>=0 else "neg"}">{row["priceChangePercent"]:+.2f}%</div><div class="vol-text">VOL: {row["quoteVolume"]/1e6:.1f}M</div></div></div>', unsafe_allow_html=True)
             with c2:
-                st.write("")
+                st.write(""); 
                 if st.button("DIVE", key=f"d_{symbol}", use_container_width=True):
                     st.session_state.selected_coins.add(symbol); st.rerun()
             st.markdown(f'<div class="crypto-card-body"><div class="tf-grid">{"".join(tfs)}</div></div><div style="margin-bottom:25px;"></div>', unsafe_allow_html=True)
-    st.markdown(f'<div style="text-align:right; color:#444; margin-bottom:10px; font-family:monospace; font-size:0.8rem;">ENGINE_V8 | HB: {datetime.now().strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="text-align:right; color:#444; margin-bottom:10px; font-family:monospace; font-size:0.8rem;">SYSTEM_HEARTBEAT: {datetime.now().strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
 
 # --- MAIN ---
 
@@ -256,8 +247,7 @@ def main():
     .spark-bar { position:absolute; width:14%; }
     .spark-bar.pos-bar { bottom:50%; border-radius:1px 1px 0 0; }
     .spark-bar.neg-bar { top:50%; border-radius:0 0 1px 1px; }
-    .pos { color:#00ff88; }
-    .neg { color:#ff0055; }
+    .pos { color:#00ff88; } .neg { color:#ff0055; }
     .bg-pos { background:rgba(0, 255, 136, 0.1); color:#00ff88; border: 1px solid #00ff8833; }
     .bg-neg { background:rgba(255, 0, 85, 0.1); color:#ff0055; border: 1px solid #ff005533; }
     div.stButton > button { background-color: transparent; color: #00f2ff; border: 1px solid #00f2ff; font-family: 'Orbitron', sans-serif; font-weight: bold; border-radius: 5px; transition: all 0.3s ease; text-transform: uppercase; letter-spacing: 2px; }
@@ -277,7 +267,8 @@ def main():
     if st.sidebar.button("CLEAR_ALL_DIVES"): st.session_state.selected_coins.clear(); st.rerun()
     auto = st.sidebar.toggle("AUTO_SYNC (3s)", value=True)
     st.sidebar.divider()
-    for sym in list(st.session_state.selected_coins): render_detail_view(sym); st.divider()
+    with st.spinner("LOADING_ANALYTICS..."):
+        for sym in list(st.session_state.selected_coins): render_detail_view(sym); st.divider()
     st.markdown('<h1 class="neon-title">CORE MONITOR</h1>', unsafe_allow_html=True)
     if auto: render_dashboard_fragment()
     else: render_dashboard_fragment.__wrapped__()
